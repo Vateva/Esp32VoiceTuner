@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <cmath>
+#include <driver/i2s.h>
 
 // safe data structures for audio processing
 // these structures are designed to prevent memory corruption and crashes
@@ -11,12 +12,13 @@ struct AudioBuffer {
     uint64_t captureTime;          // timestamp when audio was recorded (in microseconds)
     uint32_t bufferID;             // unique number to track this specific buffer
     uint16_t sampleCount;          // how many audio samples we have (max 1024)
-    float amplitude;               // volume level of the test signal we generated
+    float amplitude;               // maximum amplitude detected in this buffer
+    float rmsLevel;                // rms level for audio monitoring
     bool isValid;                  // flag to check if this buffer got corrupted
     
     // constructor initializes all values to safe defaults
     AudioBuffer() : samples(nullptr), captureTime(0), bufferID(0), 
-                   sampleCount(0), amplitude(0.0f), isValid(false) {}
+                   sampleCount(0), amplitude(0.0f), rmsLevel(0.0f), isValid(false) {}
     
     // allocate memory for audio samples on the heap
     // heap is better than stack for large arrays because stack is limited
@@ -73,6 +75,20 @@ struct TuningResult {
                confidence >= 0.0f && confidence <= 1.0f;
     }
 };
+
+// i2s configuration for inmp441 microphone
+// esp32-s3 supports multiple i2s ports, we use i2s_num_0
+#define I2S_PORT          I2S_NUM_0
+#define I2S_SAMPLE_RATE   16000
+#define I2S_SAMPLE_BITS   I2S_BITS_PER_SAMPLE_32BIT
+#define I2S_CHANNELS      I2S_CHANNEL_MONO
+#define I2S_DMA_BUF_COUNT 2        // double buffering
+#define I2S_DMA_BUF_LEN   1024     // samples per dma buffer
+
+// gpio pin assignments for inmp441
+#define I2S_SCK_PIN       13       // serial clock (bit clock)
+#define I2S_WS_PIN        12       // word select (left/right clock)
+#define I2S_SD_PIN        11       // serial data (audio input)
 
 // thread-safe global variables for multi-core communication
 // freertos uses handles to reference queues, tasks, and mutexes
@@ -172,8 +188,139 @@ void updateStats(uint64_t latency) {
     }
 }
 
-// audio processing functions for testing and simulation
+// initialize i2s peripheral for inmp441 microphone
+// configures esp32-s3 i2s0 port for audio input
+bool initI2S() {
+    // i2s configuration structure
+    // this tells the esp32 how to communicate with the inmp441
+    i2s_config_t i2s_config = {
+        .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),  // master mode, receive only
+        .sample_rate = I2S_SAMPLE_RATE,                       // 16khz sample rate
+        .bits_per_sample = I2S_SAMPLE_BITS,                   // 32 bits per sample
+        .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,          // mono audio (left channel only)
+        .communication_format = I2S_COMM_FORMAT_STAND_I2S,    // standard i2s protocol
+        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,            // interrupt priority
+        .dma_buf_count = I2S_DMA_BUF_COUNT,                  // number of dma buffers (2 for double buffering)
+        .dma_buf_len = I2S_DMA_BUF_LEN,                      // samples per dma buffer
+        .use_apll = false,                                    // use pll clock (more stable than apll for this sample rate)
+        .tx_desc_auto_clear = false,                          // not used for rx only
+        .fixed_mclk = 0                                       // auto calculate master clock
+    };
+    
+    // gpio pin configuration for i2s signals
+    // connects esp32 pins to inmp441 pins
+    i2s_pin_config_t pin_config = {
+        .bck_io_num = I2S_SCK_PIN,     // bit clock pin (gpio 13)
+        .ws_io_num = I2S_WS_PIN,       // word select pin (gpio 12)  
+        .data_out_num = I2S_PIN_NO_CHANGE,  // not used for input only
+        .data_in_num = I2S_SD_PIN      // data input pin (gpio 11)
+    };
+    
+    // install and start i2s driver
+    esp_err_t result = i2s_driver_install(I2S_PORT, &i2s_config, 0, NULL);
+    if (result != ESP_OK) {
+        safePrintf("ERROR: i2s_driver_install failed: %s\n", esp_err_to_name(result));
+        return false;
+    }
+    
+    // configure gpio pins for i2s
+    result = i2s_set_pin(I2S_PORT, &pin_config);
+    if (result != ESP_OK) {
+        safePrintf("ERROR: i2s_set_pin failed: %s\n", esp_err_to_name(result));
+        i2s_driver_uninstall(I2S_PORT);
+        return false;
+    }
+    
+    // clear any existing data in dma buffers
+    // prevents old data from appearing in first capture
+    i2s_zero_dma_buffer(I2S_PORT);
+    
+    safePrint("I2S initialized successfully\n");
+    return true;
+}
 
+// capture real audio from inmp441 microphone via i2s dma
+// replaces the old generatetestaudio function
+bool captureRealAudio(AudioBuffer* buffer) {
+    if (!buffer || !buffer->validate()) {
+        safePrint("ERROR: Invalid buffer in captureRealAudio\n");
+        return false;
+    }
+    
+    // record when we started capturing this audio
+    buffer->captureTime = esp_timer_get_time();
+    
+    // temporary buffer for raw i2s data (32-bit integers)
+    // inmp441 outputs 24-bit data in 32-bit containers
+    int32_t* rawSamples = (int32_t*)malloc(buffer->sampleCount * sizeof(int32_t));
+    if (!rawSamples) {
+        safePrint("ERROR: Failed to allocate raw sample buffer\n");
+        return false;
+    }
+    
+    // read audio data from i2s dma buffers
+    size_t bytesRead = 0;
+    esp_err_t result = i2s_read(I2S_PORT, rawSamples, 
+                               buffer->sampleCount * sizeof(int32_t), 
+                               &bytesRead, pdMS_TO_TICKS(100));
+    
+    if (result != ESP_OK) {
+        safePrintf("ERROR: i2s_read failed: %s\n", esp_err_to_name(result));
+        free(rawSamples);
+        return false;
+    }
+    
+    // check if we got the expected amount of data
+    uint16_t samplesReceived = bytesRead / sizeof(int32_t);
+    if (samplesReceived != buffer->sampleCount) {
+        safePrintf("WARNING: Expected %d samples, got %d\n", 
+                  buffer->sampleCount, samplesReceived);
+        // continue processing with whatever we got
+        buffer->sampleCount = samplesReceived;
+    }
+    
+    // convert raw 32-bit integers to normalized float values
+    // inmp441 outputs 24-bit data left-aligned in 32-bit words
+    float maxAmplitude = 0.0f;
+    float sumSquares = 0.0f;
+    
+    for (uint16_t i = 0; i < buffer->sampleCount; i++) {
+        // extract 24-bit audio data from 32-bit container
+        // shift right by 8 to get the actual 24-bit value
+        int32_t sample24 = rawSamples[i] >> 8;
+        
+        // normalize to float range [-1.0, +1.0]
+        // divide by maximum 24-bit value (8388607 = 2^23 - 1)
+        buffer->samples[i] = (float)sample24 / 8388607.0f;
+        
+        // track maximum amplitude for monitoring
+        float absValue = fabsf(buffer->samples[i]);
+        if (absValue > maxAmplitude) {
+            maxAmplitude = absValue;
+        }
+        
+        // accumulate for rms calculation
+        sumSquares += buffer->samples[i] * buffer->samples[i];
+    }
+    
+    // store audio level information for monitoring
+    buffer->amplitude = maxAmplitude;
+    buffer->rmsLevel = sqrtf(sumSquares / buffer->sampleCount);
+    
+    // clean up temporary buffer
+    free(rawSamples);
+    
+    // debug output: show audio levels to verify microphone is working
+    // remove this section when project is completed to reduce latency
+    safePrintf("Audio captured: Buffer %lu, Peak=%.3f, RMS=%.3f\n",
+              buffer->bufferID, buffer->amplitude, buffer->rmsLevel);
+    
+    return true;
+}
+
+// commented out test audio generation code
+// kept for reference but replaced by real i2s capture
+/*
 // create fake audio data for testing the system
 // generates sine waves at known frequencies so we can verify detection works
 bool generateTestAudio(AudioBuffer* buffer) {
@@ -199,6 +346,7 @@ bool generateTestAudio(AudioBuffer* buffer) {
     
     return true;
 }
+*/
 
 // fake frequency analysis that pretends to do fft and pitch detection
 // in real code this would be complex math, but for testing we just simulate the delay
@@ -212,12 +360,15 @@ bool simulateProcessing(const AudioBuffer* input, TuningResult* output) {
     uint32_t processTimeMs = 25 + (input->bufferID % 50);
     vTaskDelay(pdMS_TO_TICKS(processTimeMs));
     
-    // fill output with fake but realistic results
+    // fill output with fake but realistic results based on audio levels
     output->bufferID = input->bufferID;
     output->captureTime = input->captureTime;
     output->processTime = esp_timer_get_time();
-    output->frequency = 440.0f + (input->bufferID % 20) - 10.0f; // match input frequency
-    output->confidence = input->amplitude; // louder signals = higher confidence
+    
+    // estimate frequency based on audio characteristics
+    // in real version this would be actual fft/pitch detection
+    output->frequency = 440.0f + (input->rmsLevel * 100.0f) - 50.0f; // vary with audio level
+    output->confidence = fminf(input->rmsLevel * 2.0f, 1.0f); // louder = more confident
     output->centsOffset = (output->frequency - 440.0f) * 3.93f; // convert hz to cents
     
     // determine note name based on frequency
@@ -236,8 +387,8 @@ bool simulateProcessing(const AudioBuffer* input, TuningResult* output) {
 }
 
 // core 0: audio capture task
-// this runs on core 0 and captures audio every 64ms
-// in real implementation this would read from inmp441 microphone
+// this runs on core 0 and captures audio every 64ms from inmp441
+// uses i2s dma for continuous audio input
 
 void audioTask(void* parameter) {
     vTaskDelay(pdMS_TO_TICKS(100)); // wait for system to stabilize
@@ -273,10 +424,9 @@ void audioTask(void* parameter) {
             // assign unique id for tracking this buffer through the system
             buffer->bufferID = getNextBufferID();
             
-            // fill with test audio data
-            // in real version this would be: i2s_read() from inmp441
-            if (!generateTestAudio(buffer)) {
-                safePrint("ERROR: Failed to generate test audio\n");
+            // capture real audio from inmp441 microphone
+            if (!captureRealAudio(buffer)) {
+                safePrint("ERROR: Failed to capture real audio\n");
                 buffer->cleanup();
                 delete buffer;
                 vTaskDelay(pdMS_TO_TICKS(10));
@@ -428,9 +578,15 @@ void setup() {
     Serial.begin(115200);
     delay(2000);
     
-    Serial.println("=== ESP32-S3 Multi-Core Audio Tuner (Memory-Safe) ===");
+    Serial.println("=== ESP32-S3 Multi-Core Audio Tuner with I2S Capture ===");
     Serial.printf("CPU Frequency: %d MHz\n", getCpuFrequencyMhz());
     Serial.printf("Free Heap: %lu bytes\n", (uint32_t)esp_get_free_heap_size());
+    
+    // initialize i2s for audio capture first
+    if (!initI2S()) {
+        Serial.println("FATAL: I2S initialization failed");
+        return;
+    }
     
     // create mutexes before anything else
     // these prevent cores from interfering with each other
@@ -473,7 +629,7 @@ void setup() {
     }
     
     Serial.println("All tasks created successfully");
-    Serial.println("System starting...\n");
+    Serial.println("System starting with I2S audio capture...\n");
 }
 
 // main loop does almost nothing
