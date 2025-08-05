@@ -90,6 +90,22 @@ struct TuningResult {
 #define I2S_WS_PIN        12       // word select (left/right clock)
 #define I2S_SD_PIN        11       // serial data (audio input)
 
+// autocorrelation algorithm parameters
+#define MIN_PERIOD        73       // minimum period for ~220hz at 16khz (low note detection)
+#define MAX_PERIOD        727      // maximum period for ~22hz at 16khz (very low fundamentals)
+#define CORRELATION_THRESHOLD 0.3f // minimum correlation needed for confident detection
+
+// function declarations for audio processing and analysis
+bool captureRealAudio(AudioBuffer* buffer);
+bool autocorrelationAnalysis(const AudioBuffer* input, TuningResult* output);
+void convertFrequencyToNote(float frequency, char* noteName, size_t nameSize);
+float calculateCentsOffset(float frequency);
+void displayResult(const TuningResult* result);
+
+// task function declarations
+void audioTask(void* parameter);
+void processingAndDisplayTask(void* parameter);
+
 // thread-safe global variables for multi-core communication
 // freertos uses handles to reference queues, tasks, and mutexes
 
@@ -99,14 +115,11 @@ SemaphoreHandle_t serialMutex = nullptr;
 
 // queues let cores send data to each other safely
 // audioqueue sends audiobuffer pointers from core 0 to core 1
-// resultqueue sends tuningresult pointers from core 1 back to core 0
 QueueHandle_t audioQueue = nullptr;      // holds AudioBuffer* (just pointers, not full structs)
-QueueHandle_t resultQueue = nullptr;     // holds TuningResult* (pointers are fast to copy)
 
 // task handles let us monitor and control the running tasks
 TaskHandle_t audioTaskHandle = nullptr;
-TaskHandle_t mathTaskHandle = nullptr;
-TaskHandle_t displayTaskHandle = nullptr;
+TaskHandle_t processingTaskHandle = nullptr;
 
 // atomic counters are thread-safe without needing mutexes
 // the cpu hardware guarantees these operations won't be interrupted
@@ -240,7 +253,7 @@ bool initI2S() {
 }
 
 // capture real audio from inmp441 microphone via i2s dma
-// replaces the old generatetestaudio function
+// fills audiobuffer with normalized float samples from microphone
 bool captureRealAudio(AudioBuffer* buffer) {
     if (!buffer || !buffer->validate()) {
         safePrint("ERROR: Invalid buffer in captureRealAudio\n");
@@ -318,72 +331,160 @@ bool captureRealAudio(AudioBuffer* buffer) {
     return true;
 }
 
-// commented out test audio generation code
-// kept for reference but replaced by real i2s capture
-/*
-// create fake audio data for testing the system
-// generates sine waves at known frequencies so we can verify detection works
-bool generateTestAudio(AudioBuffer* buffer) {
-    if (!buffer || !buffer->validate()) {
-        safePrint("ERROR: Invalid buffer in generateTestAudio\n");
-        return false;
-    }
-    
-    // record when we captured this audio
-    buffer->captureTime = esp_timer_get_time();
-    
-    // create slightly different frequency for each buffer so we can see changes
-    float frequency = 440.0f + (buffer->bufferID % 20) - 10.0f; // 430-450 hz range
-    // vary amplitude over time to simulate real audio
-    buffer->amplitude = 0.5f + 0.3f * sinf(buffer->bufferID * 0.1f);
-    
-    // fill the sample array with sine wave data
-    // 16khz sample rate means each sample represents 1/16000 seconds
-    for (uint16_t i = 0; i < buffer->sampleCount; i++) {
-        float time = i / 16000.0f; // convert sample index to time in seconds
-        buffer->samples[i] = buffer->amplitude * sinf(2.0f * PI * frequency * time);
-    }
-    
-    return true;
-}
-*/
-
-// fake frequency analysis that pretends to do fft and pitch detection
-// in real code this would be complex math, but for testing we just simulate the delay
-bool simulateProcessing(const AudioBuffer* input, TuningResult* output) {
+// autocorrelation pitch detection algorithm
+// analyzes audio buffer to find fundamental frequency using autocorrelation method
+bool autocorrelationAnalysis(const AudioBuffer* input, TuningResult* output) {
     if (!input || !output || !input->validate()) {
-        safePrint("ERROR: Invalid input to simulateProcessing\n");
+        safePrint("ERROR: Invalid input to autocorrelationAnalysis\n");
         return false;
     }
     
-    // simulate the time real fft/pitch detection would take (25-75ms)
-    uint32_t processTimeMs = 25 + (input->bufferID % 50);
-    vTaskDelay(pdMS_TO_TICKS(processTimeMs));
+    // record processing start time
+    uint64_t startTime = esp_timer_get_time();
     
-    // fill output with fake but realistic results based on audio levels
+    // copy timing information from input
     output->bufferID = input->bufferID;
     output->captureTime = input->captureTime;
+    
+    // check if audio signal is strong enough for analysis
+    // very quiet signals often give unreliable pitch detection
+    if (input->rmsLevel < 0.01f) {
+        safePrintf("Signal too quiet for analysis: RMS=%.4f\n", input->rmsLevel);
+        return false;
+    }
+    
+    // autocorrelation variables
+    float bestCorrelation = 0.0f;
+    int bestPeriod = 0;
+    
+    // search for the best autocorrelation peak within period range
+    // period corresponds to fundamental frequency: freq = samplerate / period
+    for (int period = MIN_PERIOD; period <= MAX_PERIOD && period < input->sampleCount / 2; period++) {
+        float correlation = 0.0f;
+        float energy1 = 0.0f;
+        float energy2 = 0.0f;
+        
+        // calculate autocorrelation for this period (lag)
+        // compare signal with itself shifted by 'period' samples
+        int numSamples = input->sampleCount - period;
+        for (int i = 0; i < numSamples; i++) {
+            float sample1 = input->samples[i];
+            float sample2 = input->samples[i + period];
+            
+            correlation += sample1 * sample2;  // cross-correlation
+            energy1 += sample1 * sample1;      // energy of first segment
+            energy2 += sample2 * sample2;      // energy of second segment
+        }
+        
+        // normalize correlation by the geometric mean of energies
+        // this prevents loud signals from dominating correlation values
+        float totalEnergy = sqrtf(energy1 * energy2);
+        if (totalEnergy > 0.0f) {
+            correlation /= totalEnergy;
+        }
+        
+        // check if this is the best correlation found so far
+        if (correlation > bestCorrelation) {
+            bestCorrelation = correlation;
+            bestPeriod = period;
+        }
+    }
+    
+    // verify that we found a strong enough correlation peak
+    if (bestCorrelation < CORRELATION_THRESHOLD || bestPeriod == 0) {
+        safePrintf("No strong correlation found: best=%.3f, threshold=%.3f\n", 
+                  bestCorrelation, CORRELATION_THRESHOLD);
+        return false;
+    }
+    
+    // convert period to frequency
+    // frequency = sample_rate / period_in_samples
+    output->frequency = (float)I2S_SAMPLE_RATE / (float)bestPeriod;
+    
+    // calculate confidence based on correlation strength
+    // stronger correlation = higher confidence in the result
+    output->confidence = fminf(bestCorrelation, 1.0f);
+    
+    // determine musical note name from frequency
+    convertFrequencyToNote(output->frequency, output->noteName, sizeof(output->noteName));
+    
+    // calculate cents offset from perfect pitch
+    output->centsOffset = calculateCentsOffset(output->frequency);
+    
+    // record processing completion time
     output->processTime = esp_timer_get_time();
     
-    // estimate frequency based on audio characteristics
-    // in real version this would be actual fft/pitch detection
-    output->frequency = 440.0f + (input->rmsLevel * 100.0f) - 50.0f; // vary with audio level
-    output->confidence = fminf(input->rmsLevel * 2.0f, 1.0f); // louder = more confident
-    output->centsOffset = (output->frequency - 440.0f) * 3.93f; // convert hz to cents
-    
-    // determine note name based on frequency
-    // safe string operations prevent buffer overflows
-    if (output->frequency < 435.0f) {
-        strncpy(output->noteName, "A4-", sizeof(output->noteName) - 1);
-    } else if (output->frequency > 445.0f) {
-        strncpy(output->noteName, "A4+", sizeof(output->noteName) - 1);
-    } else {
-        strncpy(output->noteName, "A4", sizeof(output->noteName) - 1);
-    }
-    output->noteName[sizeof(output->noteName) - 1] = '\0'; // ensure null termination
-    
+    // mark result as valid
     output->isValid = true;
+    
+    // debug output showing analysis results
+    uint64_t processingTime = output->processTime - startTime;
+    safePrintf("Autocorr: Period=%d, Freq=%.1fHz, Corr=%.3f, Time=%lluμs\n",
+              bestPeriod, output->frequency, bestCorrelation, processingTime);
+    
     return output->validate();
+}
+
+// convert frequency to musical note name
+// determines the closest musical note and stores it as a string
+void convertFrequencyToNote(float frequency, char* noteName, size_t nameSize) {
+    if (!noteName || nameSize < 4) return;
+    
+    // note names in chromatic scale
+    const char* noteNames[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+    
+    // calculate semitones from A4 (440Hz)
+    // formula: semitones = 12 * log2(freq / 440)
+    float semitonesFromA4 = 12.0f * log2f(frequency / 440.0f);
+    int totalSemitones = (int)roundf(semitonesFromA4);
+    
+    // determine octave (A4 is octave 4)
+    int octave = 4 + (totalSemitones + 9) / 12;  // +9 because A is 9 semitones from C
+    if (totalSemitones + 9 < 0) octave--;  // handle negative case correctly
+    
+    // determine note within the octave
+    int noteIndex = ((totalSemitones + 9) % 12 + 12) % 12;  // ensure positive result
+    
+    // format note name with octave
+    snprintf(noteName, nameSize, "%s%d", noteNames[noteIndex], octave);
+}
+
+// calculate cents offset from perfect pitch
+// returns how many cents sharp (+) or flat (-) the frequency is
+float calculateCentsOffset(float frequency) {
+    // find the nearest semitone frequency
+    float semitonesFromA4 = 12.0f * log2f(frequency / 440.0f);
+    float nearestSemitone = roundf(semitonesFromA4);
+    
+    // calculate the frequency of the nearest perfect semitone
+    float perfectFrequency = 440.0f * powf(2.0f, nearestSemitone / 12.0f);
+    
+    // calculate cents offset from perfect pitch
+    // 100 cents = 1 semitone
+    float centsOffset = 1200.0f * log2f(frequency / perfectFrequency);
+    
+    return centsOffset;
+}
+
+// display tuning results to user
+// shows frequency, note name, cents offset, and confidence
+void displayResult(const TuningResult* result) {
+    if (!result || !result->validate()) {
+        safePrint("ERROR: Invalid result in displayResult\n");
+        return;
+    }
+    
+    // calculate total latency from capture to display
+    uint64_t totalLatency = result->processTime - result->captureTime;
+    
+    // display comprehensive tuning information
+    // note: in final version this will be replaced with gc9a01 graphics
+    safePrintf("♪ Buffer %lu: %s %.1fHz %+.1f cents (%.0f%% conf) lat=%lluμs\n",
+              result->bufferID, result->noteName, result->frequency,
+              result->centsOffset, result->confidence * 100.0f, totalLatency);
+    
+    // update performance statistics
+    updateStats(totalLatency);
 }
 
 // core 0: audio capture task
@@ -433,7 +534,7 @@ void audioTask(void* parameter) {
                 continue;
             }
             
-            // send buffer pointer to processing queue
+            // send buffer pointer to processing task
             // we send pointer not full struct because copying 1024 floats is slow
             if (xQueueSend(audioQueue, &buffer, 0) != pdPASS) {
                 // queue is full, drop oldest buffer to make room
@@ -475,15 +576,15 @@ void audioTask(void* parameter) {
     }
 }
 
-// core 1: math processing task
-// this runs on core 1 and does the heavy fft/pitch detection math
-// separating this from audio capture prevents audio dropouts
+// core 1: combined processing and display task
+// this runs on core 1 and does pitch detection analysis then displays results
+// combining both operations eliminates communication overhead and ensures latest results
 
-void mathTask(void* parameter) {
+void processingAndDisplayTask(void* parameter) {
     vTaskDelay(pdMS_TO_TICKS(150)); // wait for system startup
     
     uint8_t coreID = xPortGetCoreID();
-    safePrintf("Math task started on core %d\n", coreID);
+    safePrintf("Processing+Display task started on core %d\n", coreID);
     
     while (true) {
         AudioBuffer* inputBuffer;
@@ -492,7 +593,7 @@ void mathTask(void* parameter) {
         // portmax_delay means wait forever until data arrives
         if (xQueueReceive(audioQueue, &inputBuffer, portMAX_DELAY) == pdPASS) {
             if (!inputBuffer || !inputBuffer->validate()) {
-                safePrint("ERROR: Received invalid buffer in math task\n");
+                safePrint("ERROR: Received invalid buffer in processing task\n");
                 if (inputBuffer) {
                     inputBuffer->cleanup();
                     delete inputBuffer;
@@ -501,73 +602,22 @@ void mathTask(void* parameter) {
             }
             
             // create result structure for our findings
-            TuningResult* result = new TuningResult();
-            if (!result) {
-                safePrint("ERROR: Failed to allocate result\n");
-                inputBuffer->cleanup();
-                delete inputBuffer;
-                continue;
-            }
+            TuningResult result;
             
-            // do the actual frequency analysis
-            // in real version this would be: fft, peak detection, pitch calculation
-            if (simulateProcessing(inputBuffer, result)) {
-                // send results to display task
-                if (xQueueSend(resultQueue, &result, pdMS_TO_TICKS(100)) != pdPASS) {
-                    safePrintf("ERROR: Failed to send result for buffer %lu\n", 
-                              inputBuffer->bufferID);
-                    delete result;
-                } else {
-                    __atomic_fetch_add(&processedCount, 1, __ATOMIC_SEQ_CST);
-                }
+            // do the actual frequency analysis using autocorrelation
+            if (autocorrelationAnalysis(inputBuffer, &result)) {
+                // immediately display the results (no queue needed - same core)
+                displayResult(&result);
+                __atomic_fetch_add(&processedCount, 1, __ATOMIC_SEQ_CST);
             } else {
-                safePrint("ERROR: Processing failed\n");
-                delete result;
+                // analysis failed - skip this buffer but don't crash
+                safePrintf("Analysis failed for buffer %lu\n", inputBuffer->bufferID);
             }
             
             // always clean up input buffer memory
             inputBuffer->cleanup();
             delete inputBuffer;
         }
-    }
-}
-
-// core 0: display task
-// this runs on core 0 and shows results on gc9a01 display
-// also handles serial output for debugging
-
-void displayTask(void* parameter) {
-    vTaskDelay(pdMS_TO_TICKS(200)); // wait for system startup
-    
-    uint8_t coreID = xPortGetCoreID();
-    safePrintf("Display task started on core %d\n", coreID);
-    
-    while (true) {
-        TuningResult* result;
-        
-        // check for new analysis results
-        // timeout prevents blocking forever if no results come
-        if (xQueueReceive(resultQueue, &result, pdMS_TO_TICKS(100)) == pdPASS) {
-            if (result && result->validate()) {
-                // calculate total time from capture to display
-                uint64_t totalLatency = result->processTime - result->captureTime;
-                updateStats(totalLatency);
-                
-                // show the tuning result
-                // in real version this would update gc9a01 display graphics
-                safePrintf("Buffer %lu: %s %.1fHz %+.1f cents (%.1f%%) lat=%llu μs\n",
-                          result->bufferID, result->noteName, result->frequency,
-                          result->centsOffset, result->confidence * 100.0f, totalLatency);
-            } else {
-                safePrint("ERROR: Received invalid result\n");
-            }
-            
-            // clean up result memory
-            if (result) delete result;
-        }
-        
-        // small delay prevents excessive cpu usage
-        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 
@@ -578,7 +628,7 @@ void setup() {
     Serial.begin(115200);
     delay(2000);
     
-    Serial.println("=== ESP32-S3 Multi-Core Audio Tuner with I2S Capture ===");
+    Serial.println("=== ESP32-S3 Multi-Core Audio Tuner with Autocorrelation ===");
     Serial.printf("CPU Frequency: %d MHz\n", getCpuFrequencyMhz());
     Serial.printf("Free Heap: %lu bytes\n", (uint32_t)esp_get_free_heap_size());
     
@@ -603,33 +653,29 @@ void setup() {
     // create queues for inter-task communication
     // size 4 means we can buffer up to 4 items before blocking
     audioQueue = xQueueCreate(4, sizeof(AudioBuffer*));
-    resultQueue = xQueueCreate(4, sizeof(TuningResult*));
     
-    if (!audioQueue || !resultQueue) {
-        Serial.println("FATAL: Failed to create queues");
+    if (!audioQueue) {
+        Serial.println("FATAL: Failed to create audio queue");
         return;
     }
     
-    Serial.println("Queues created successfully");
+    Serial.println("Audio queue created successfully");
     
     // create tasks with specific core assignments
-    // audio and display on core 0, math on core 1 for load balancing
+    // audio on core 0, processing+display on core 1 for load balancing
     BaseType_t result1 = xTaskCreatePinnedToCore(
         audioTask, "AudioTask", 16384, NULL, 3, &audioTaskHandle, 0);
     
     BaseType_t result2 = xTaskCreatePinnedToCore(
-        displayTask, "DisplayTask", 12288, NULL, 2, &displayTaskHandle, 0);
+        processingAndDisplayTask, "ProcessingTask", 16384, NULL, 2, &processingTaskHandle, 1);
     
-    BaseType_t result3 = xTaskCreatePinnedToCore(
-        mathTask, "MathTask", 16384, NULL, 3, &mathTaskHandle, 1);
-    
-    if (result1 != pdPASS || result2 != pdPASS || result3 != pdPASS) {
+    if (result1 != pdPASS || result2 != pdPASS) {
         Serial.println("FATAL: Failed to create tasks");
         return;
     }
     
     Serial.println("All tasks created successfully");
-    Serial.println("System starting with I2S audio capture...\n");
+    Serial.println("System starting with I2S capture and autocorrelation analysis...\n");
 }
 
 // main loop does almost nothing
