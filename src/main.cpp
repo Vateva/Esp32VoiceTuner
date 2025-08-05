@@ -1,6 +1,20 @@
 #include <Arduino.h>
 #include <cmath>
 #include <driver/i2s.h>
+#define LGFX_USE_V1
+#include <LovyanGFX.hpp>
+
+// timing debug control - set to 1 to enable detailed timing output
+#define ENABLE_TIMING_DEBUG 1
+
+// display pin definitions for gc9a01
+// these connect the esp32-s3 to the round display via spi
+#define TFT_SCK     1   // spi clock signal
+#define TFT_MOSI    2   // spi data output to display
+#define TFT_CS      5   // chip select (active low)
+#define TFT_DC      4   // data/command control
+#define TFT_RST     3   // hardware reset
+#define TFT_BLK     6   // backlight control
 
 // safe data structures for audio processing
 // these structures are designed to prevent memory corruption and crashes
@@ -10,6 +24,9 @@
 struct AudioBuffer {
     float* samples;                // pointer to actual audio data stored in heap memory
     uint64_t captureTime;          // timestamp when audio was recorded (in microseconds)
+    uint64_t captureEndTime;       // timestamp when capture completed (in microseconds)
+    uint64_t queueSendTime;        // timestamp when sent to queue (in microseconds)
+    uint64_t queueReceiveTime;     // timestamp when received from queue (in microseconds)
     uint32_t bufferID;             // unique number to track this specific buffer
     uint16_t sampleCount;          // how many audio samples we have (max 1024)
     float amplitude;               // maximum amplitude detected in this buffer
@@ -17,7 +34,8 @@ struct AudioBuffer {
     bool isValid;                  // flag to check if this buffer got corrupted
     
     // constructor initializes all values to safe defaults
-    AudioBuffer() : samples(nullptr), captureTime(0), bufferID(0), 
+    AudioBuffer() : samples(nullptr), captureTime(0), captureEndTime(0), 
+                   queueSendTime(0), queueReceiveTime(0), bufferID(0), 
                    sampleCount(0), amplitude(0.0f), rmsLevel(0.0f), isValid(false) {}
     
     // allocate memory for audio samples on the heap
@@ -57,24 +75,155 @@ struct TuningResult {
     char noteName[8];             // musical note name like "A4" or "C#3"
     float centsOffset;            // how many cents sharp or flat (-50 to +50)
     uint64_t captureTime;         // when the original audio was captured
-    uint64_t processTime;         // when we finished processing it
+    uint64_t processStartTime;    // when processing started
+    uint64_t acStartTime;         // when autocorrelation started
+    uint64_t acEndTime;           // when autocorrelation finished
+    uint64_t yinStartTime;        // when yin analysis started
+    uint64_t yinEndTime;          // when yin analysis finished
+    uint64_t displayStartTime;    // when display update started
+    uint64_t displayEndTime;      // when display update finished
     uint32_t bufferID;            // links back to the original audio buffer
-    float confidence;             // how sure we are about the result (0.0 to 1.0)
     bool isValid;                 // corruption check flag
     
     // constructor sets everything to safe default values
     TuningResult() : frequency(0), centsOffset(0), captureTime(0), 
-                    processTime(0), bufferID(0), confidence(0), isValid(false) {
+                    processStartTime(0), acStartTime(0), acEndTime(0),
+                    yinStartTime(0), yinEndTime(0), displayStartTime(0),
+                    displayEndTime(0), bufferID(0), isValid(false) {
         memset(noteName, 0, sizeof(noteName));
     }
     
     // check if the results make sense
-    // frequency should be in audible range, confidence should be 0-100%
+    // frequency should be in audible range
     bool validate() const {
-        return isValid && frequency >= 20.0f && frequency <= 20000.0f && 
-               confidence >= 0.0f && confidence <= 1.0f;
+        return isValid && frequency >= 20.0f && frequency <= 20000.0f;
     }
 };
+
+// function declarations
+bool captureRealAudio(AudioBuffer* buffer);
+int findCoarsePeriodAC(const AudioBuffer* input, TuningResult* result);
+bool yinAnalysis(const AudioBuffer* input, TuningResult* output, int hintedPeriod);
+void convertFrequencyToNote(float frequency, char* noteName, size_t nameSize);
+float calculateCentsOffset(float frequency);
+void displayResult(const TuningResult* result, const AudioBuffer* buffer);
+void initDisplay();
+void drawTunerInterface();
+void drawStaticTunerElements();
+void updateTunerDisplay(const char* note, float cents, TuningResult* result);
+void drawOptimizedCentsCircle(float cents, uint32_t circleColor);
+void drawCentsCircleMeter(float cents); // legacy function
+void audioTask(void* parameter);
+void processingAndDisplayTask(void* parameter);
+bool safePrintf(const char* format, ...);
+bool safePrint(const char* message);
+
+// timing helper function to calculate milliseconds from capture start
+// converts microsecond timestamps to milliseconds relative to capture time
+float calculateTimingMs(uint64_t currentTime, uint64_t captureTime) {
+    if (currentTime == 0 || captureTime == 0) return 0.0f;
+    return (float)(currentTime - captureTime) / 1000.0f;
+}
+
+// thread-safe timing output function
+// prints timing information with buffer id for tracking specific buffers through pipeline
+void printTiming(const char* stage, uint32_t bufferID, uint64_t currentTime, uint64_t captureTime) {
+    #if ENABLE_TIMING_DEBUG
+    if (!stage || currentTime == 0 || captureTime == 0) return;
+    float timingMs = calculateTimingMs(currentTime, captureTime);
+    safePrintf("timing: buffer %lu - %s = %.2f ms\n", bufferID, stage, timingMs);
+    #endif
+}
+
+// comprehensive timing summary for complete pipeline analysis
+// shows total time and breakdown of each major stage
+void printTimingSummary(const TuningResult* result, const AudioBuffer* buffer) {
+    #if ENABLE_TIMING_DEBUG
+    if (!result || !buffer || !result->validate()) return;
+    
+    float captureMs = calculateTimingMs(buffer->captureEndTime, buffer->captureTime);
+    float queueMs = calculateTimingMs(buffer->queueReceiveTime, buffer->queueSendTime);
+    float acMs = calculateTimingMs(result->acEndTime, result->acStartTime);
+    float yinMs = calculateTimingMs(result->yinEndTime, result->yinStartTime);
+    float displayMs = calculateTimingMs(result->displayEndTime, result->displayStartTime);
+    float totalMs = calculateTimingMs(result->displayEndTime, buffer->captureTime);
+    
+    safePrintf("=== TIMING SUMMARY buffer %lu ===\n", buffer->bufferID);
+    safePrintf("capture: %.2f ms | queue: %.2f ms | ac: %.2f ms | yin: %.2f ms | display: %.2f ms | total: %.2f ms\n",
+              captureMs, queueMs, acMs, yinMs, displayMs, totalMs);
+    safePrintf("note: %s | cents: %.1f | freq: %.1f hz\n", 
+              result->noteName, result->centsOffset, result->frequency);
+    safePrintf("======================\n");
+    #endif
+}
+
+// lovyangfx configuration class for gc9a01 display
+// this configures the spi communication and panel settings
+class LGFX : public lgfx::LGFX_Device
+{
+  lgfx::Panel_GC9A01 _panel_instance;
+  lgfx::Bus_SPI _bus_instance;
+
+public:
+  LGFX(void)
+  {
+    // configure spi bus for display communication
+    {
+      auto cfg = _bus_instance.config();
+      cfg.spi_host = SPI2_HOST;              // use spi2 peripheral
+      cfg.spi_mode = 0;                      // spi mode 0 (cpol=0, cpha=0)
+      cfg.freq_write = 40000000;             // 40mhz write speed for fast updates
+      cfg.freq_read = 16000000;              // 16mhz read speed (not used much)
+      cfg.spi_3wire = true;                  // 3-wire spi mode
+      cfg.use_lock = true;                   // thread-safe spi access
+      cfg.dma_channel = SPI_DMA_CH_AUTO;     // automatic dma channel selection
+      cfg.pin_sclk = TFT_SCK;                // clock pin
+      cfg.pin_mosi = TFT_MOSI;               // data out pin
+      cfg.pin_miso = -1;                     // not used for display
+      cfg.pin_dc = TFT_DC;                   // data/command pin
+      _bus_instance.config(cfg);
+      _panel_instance.setBus(&_bus_instance);
+    }
+
+    // configure gc9a01 panel specifics
+    {
+      auto cfg = _panel_instance.config();
+      cfg.pin_cs = TFT_CS;                   // chip select pin
+      cfg.pin_rst = TFT_RST;                 // reset pin
+      cfg.pin_busy = -1;                     // not used
+      cfg.panel_width = 240;                 // display is 240x240 pixels
+      cfg.panel_height = 240;
+      cfg.offset_x = 0;                      // no x offset needed
+      cfg.offset_y = 0;                      // no y offset needed
+      cfg.offset_rotation = 0;               // no rotation offset
+      cfg.dummy_read_pixel = 8;              // spi timing parameter
+      cfg.dummy_read_bits = 1;               // spi timing parameter
+      cfg.readable = false;                  // can't read from display
+      cfg.invert = true;                     // gc9a01 needs color inversion
+      cfg.rgb_order = false;                 // bgr color order
+      cfg.dlen_16bit = false;                // 8-bit data length
+      cfg.bus_shared = false;                // dedicated spi bus
+      _panel_instance.config(cfg);
+    }
+
+    setPanel(&_panel_instance);
+  }
+};
+
+// create global display instance
+LGFX tft;
+
+// display state variables for smooth updates
+// these prevent flickering and track what's currently shown
+struct DisplayState {
+    char lastNoteName[8];        // previous note to detect changes
+    float lastCentsOffset;       // previous cents to detect changes
+    uint32_t lastUpdateTime;     // timestamp of last display update
+    bool needsFullRedraw;        // flag to force complete screen refresh
+    int lastDynamicRadius;       // previous dynamic circle radius for efficient erasing
+    uint32_t lastDynamicColor;   // previous dynamic circle color
+    bool staticCirclesDrawn;     // flag to track if static circles are already drawn
+} displayState = {"", 0.0f, 0, true, 0, 0, false};
 
 // i2s configuration for inmp441 microphone
 // esp32-s3 supports multiple i2s ports, we use i2s_num_0
@@ -90,21 +239,16 @@ struct TuningResult {
 #define I2S_WS_PIN        12       // word select (left/right clock)
 #define I2S_SD_PIN        11       // serial data (audio input)
 
-// autocorrelation algorithm parameters
-#define MIN_PERIOD        73       // minimum period for ~220hz at 16khz (low note detection)
-#define MAX_PERIOD        727      // maximum period for ~22hz at 16khz (very low fundamentals)
-#define CORRELATION_THRESHOLD 0.3f // minimum correlation needed for confident detection
+// --- MODIFIED: PITCH DETECTION PARAMETERS ---
+// Autocorrelation parameters (First Pass)
+#define MIN_PERIOD        13       // minimum period for ~1230hz at 16khz (high soprano range)
+#define MAX_PERIOD        400      // maximum period for ~40hz at 16khz (low bass range)
+#define CORRELATION_THRESHOLD 0.3f // minimum correlation for a valid coarse result
 
-// function declarations for audio processing and analysis
-bool captureRealAudio(AudioBuffer* buffer);
-bool autocorrelationAnalysis(const AudioBuffer* input, TuningResult* output);
-void convertFrequencyToNote(float frequency, char* noteName, size_t nameSize);
-float calculateCentsOffset(float frequency);
-void displayResult(const TuningResult* result);
+// NEW: YIN algorithm parameters (Second Pass)
+#define YIN_THRESHOLD     0.15f    // YIN confidence threshold
+#define YIN_SEARCH_WINDOW 0.40f    // Search +/- 20% around the hinted period
 
-// task function declarations
-void audioTask(void* parameter);
-void processingAndDisplayTask(void* parameter);
 
 // thread-safe global variables for multi-core communication
 // freertos uses handles to reference queues, tasks, and mutexes
@@ -112,6 +256,10 @@ void processingAndDisplayTask(void* parameter);
 // mutex prevents multiple cores from writing to serial at the same time
 // without this, serial output gets scrambled when cores try to print simultaneously
 SemaphoreHandle_t serialMutex = nullptr;
+
+// display mutex prevents display corruption during updates
+// lovyangfx has some thread safety but we add extra protection
+SemaphoreHandle_t displayMutex = nullptr;
 
 // queues let cores send data to each other safely
 // audioqueue sends audiobuffer pointers from core 0 to core 1
@@ -201,6 +349,194 @@ void updateStats(uint64_t latency) {
     }
 }
 
+// initialize display hardware and draw initial interface
+// sets up lovyangfx, enables backlight, and draws the tuner ui
+void initDisplay() {
+    // enable backlight first so user sees something happening
+    pinMode(TFT_BLK, OUTPUT);
+    digitalWrite(TFT_BLK, HIGH);
+    safePrint("display backlight enabled\n");
+    
+    // initialize lovyangfx with our gc9a01 configuration
+    tft.init();
+    tft.setRotation(0);  // no rotation, use default orientation
+    
+    // test display with color flashes to verify it's working
+    tft.fillScreen(TFT_RED);
+    delay(200);
+    tft.fillScreen(TFT_GREEN);
+    delay(200);
+    tft.fillScreen(TFT_BLUE);
+    delay(200);
+    tft.fillScreen(TFT_BLACK);
+    
+    safePrint("display initialized successfully\n");
+    
+    // draw the initial tuner interface
+    drawTunerInterface();
+}
+
+
+// draw the static parts of the tuner interface that never change
+// this creates the background layout once and marks it as drawn
+void drawStaticTunerElements() {
+    if (displayState.staticCirclesDrawn) return; // already drawn, skip
+    
+    // draw the three concentric circles for the cents meter
+    int centerX = 120;
+    int centerY = 120;
+
+    // outer circle for +25 cents range
+    tft.drawCircle(centerX, centerY, 110, TFT_DARKGREY);
+    tft.setTextSize(1);
+    tft.setTextColor(TFT_DARKGREY);
+    tft.drawCenterString("+25", centerX + 85, centerY - 85);
+
+    // inner circle for -25 cents range
+    tft.drawCircle(centerX, centerY, 70, TFT_DARKGREY);
+    tft.drawCenterString("-25", centerX + 50, centerY - 50);
+    
+    // middle circle for perfect pitch
+    tft.drawCircle(centerX, centerY, 90, TFT_WHITE);
+    tft.setTextColor(TFT_WHITE);
+    tft.drawCenterString("0", centerX + 65, centerY - 65);
+    
+    displayState.staticCirclesDrawn = true;
+}
+
+// draw the complete interface including static and dynamic elements
+// only call this for full redraws (startup, major changes)
+void drawTunerInterface() {
+    // clear screen to black background
+    tft.fillScreen(TFT_BLACK);
+    
+    // reset static elements flag to force redraw
+    displayState.staticCirclesDrawn = false;
+    displayState.lastDynamicRadius = 0;
+    displayState.needsFullRedraw = false;
+    
+    // draw static elements
+    drawStaticTunerElements();
+}
+
+
+// update the dynamic parts of the tuner display efficiently
+// only redraws changed elements to minimize display time
+void updateTunerDisplay(const char* note, float cents, TuningResult* result) {
+    if (!displayMutex) return;
+
+    // record timing for display start
+    if (result) {
+        result->displayStartTime = esp_timer_get_time();
+        printTiming("display start", result->bufferID, result->displayStartTime, result->captureTime);
+    }
+
+    // try to get exclusive access to display
+    if (xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        
+        // ensure static elements are drawn (only draws once)
+        drawStaticTunerElements();
+        
+        // determine color based on how close to perfect pitch
+        uint32_t noteColor;
+        if (fabs(cents) < 5.0f) {
+            noteColor = TFT_GREEN;       // very close to perfect pitch
+        } else if (fabs(cents) > 5.0f && fabs(cents) < 10.0f) {
+            noteColor = TFT_GREENYELLOW; // pretty close
+        } else if (fabs(cents) > 10.0f && fabs(cents) < 15.0f) {
+            noteColor = TFT_YELLOW;      // getting off pitch
+        } else if (fabs(cents) > 15.0f && fabs(cents) < 20.0f) {
+            noteColor = TFT_ORANGE;      // noticeably off
+        } else {
+            noteColor = TFT_RED;         // way off pitch
+        }
+
+        // only update note/cents text if it changed significantly
+        if (strcmp(note, displayState.lastNoteName) != 0 || 
+            fabs(cents - displayState.lastCentsOffset) > 1.0f) {
+            
+            // clear only the text area efficiently
+            tft.fillRect(60, 40, 120, 100, TFT_BLACK);
+            
+            // draw the cents deviation (smaller, less text operations)
+            tft.setTextColor(noteColor);
+            tft.setTextSize(2);
+            char centsStr[8];
+            snprintf(centsStr, sizeof(centsStr), "%.0f", cents); // no decimal for speed
+            tft.drawCenterString(centsStr, 120, 60);
+
+            // draw the note name 
+            tft.setTextSize(4); // slightly smaller for speed
+            tft.drawCenterString(note, 120, 90);
+            
+            // update tracking variables
+            strcpy(displayState.lastNoteName, note);
+            displayState.lastCentsOffset = cents;
+        }
+
+        // update the dynamic circle efficiently
+        drawOptimizedCentsCircle(cents, noteColor);
+
+        xSemaphoreGive(displayMutex);
+        
+        // record timing for display end
+        if (result) {
+            result->displayEndTime = esp_timer_get_time();
+            printTiming("display end", result->bufferID, result->displayEndTime, result->captureTime);
+        }
+    }
+}
+
+
+// efficiently draw only the dynamic circle without touching static elements
+// this is the key optimization that reduces display time dramatically
+void drawOptimizedCentsCircle(float cents, uint32_t circleColor) {
+    // constrain cents to reasonable range
+    if (cents < -50.0f) cents = -50.0f;
+    if (cents > 50.0f) cents = 50.0f;
+
+    int centerX = 120;
+    int centerY = 120;
+    
+    // calculate new radius based on cents value
+    int newRadius;
+    if (fabs(cents) <= 25.0f) {
+        // map cents from -25 to +25 to radius from 70 to 110
+        newRadius = 90 + (int)(cents * 0.8f);
+    } else if (cents > 25.0f) {
+        // high pitch, radius grows bigger than +25 circle
+        newRadius = 110 + (int)((cents - 25.0f) * 0.4f);
+        if (newRadius > 120) newRadius = 120;
+    } else { // cents < -25.0f
+        // low pitch, radius shrinks smaller than -25 circle
+        newRadius = 70 + (int)((cents + 25.0f) * 0.4f);
+        if (newRadius < 60) newRadius = 60;
+    }
+
+    // erase previous dynamic circle by drawing it in black (only if different)
+    if (displayState.lastDynamicRadius > 0 && 
+        displayState.lastDynamicRadius != newRadius) {
+        tft.drawCircle(centerX, centerY, displayState.lastDynamicRadius, TFT_BLACK);
+    }
+
+    // draw new dynamic circle (only if radius changed or color changed)
+    if (newRadius != displayState.lastDynamicRadius || 
+        circleColor != displayState.lastDynamicColor) {
+        tft.drawCircle(centerX, centerY, newRadius, circleColor);
+        
+        // update state tracking
+        displayState.lastDynamicRadius = newRadius;
+        displayState.lastDynamicColor = circleColor;
+    }
+}
+
+// legacy function - now unused but kept for compatibility
+// the new optimized version replaces this completely
+void drawCentsCircleMeter(float cents) {
+    // this function is no longer used - replaced by drawOptimizedCentsCircle()
+    // kept here to avoid compilation errors, but should not be called
+}
+
 // initialize i2s peripheral for inmp441 microphone
 // configures esp32-s3 i2s0 port for audio input
 bool initI2S() {
@@ -262,6 +598,7 @@ bool captureRealAudio(AudioBuffer* buffer) {
     
     // record when we started capturing this audio
     buffer->captureTime = esp_timer_get_time();
+    printTiming("capture start", buffer->bufferID, buffer->captureTime, buffer->captureTime);
     
     // temporary buffer for raw i2s data (32-bit integers)
     // inmp441 outputs 24-bit data in 32-bit containers
@@ -303,8 +640,9 @@ bool captureRealAudio(AudioBuffer* buffer) {
         int32_t sample24 = rawSamples[i] >> 8;
         
         // normalize to float range [-1.0, +1.0]
-        // divide by maximum 24-bit value (8388607 = 2^23 - 1)
-        buffer->samples[i] = (float)sample24 / 8388607.0f;
+        // divide by maximum 24-bit value (8388608 = 2^23)
+        float gain = 2.5f;
+        buffer->samples[i] = (float)sample24 / 8388608.0f * gain;
         
         // track maximum amplitude for monitoring
         float absValue = fabsf(buffer->samples[i]);
@@ -320,110 +658,163 @@ bool captureRealAudio(AudioBuffer* buffer) {
     buffer->amplitude = maxAmplitude;
     buffer->rmsLevel = sqrtf(sumSquares / buffer->sampleCount);
     
+    // record when capture completed
+    buffer->captureEndTime = esp_timer_get_time();
+    printTiming("capture end", buffer->bufferID, buffer->captureEndTime, buffer->captureTime);
+    
     // clean up temporary buffer
     free(rawSamples);
     
-    // debug output: show audio levels to verify microphone is working
-    // remove this section when project is completed to reduce latency
-    safePrintf("Audio captured: Buffer %lu, Peak=%.3f, RMS=%.3f\n",
-              buffer->bufferID, buffer->amplitude, buffer->rmsLevel);
+    // only print debug info occasionally to reduce serial overhead
+    static uint32_t debugCounter = 0;
+    if ((debugCounter++ % 16) == 0) {  // print every 16th buffer (about once per second)
+        safePrintf("Audio: Buffer %lu, RMS=%.3f\n", buffer->bufferID, buffer->rmsLevel);
+    }
     
     return true;
 }
 
-// autocorrelation pitch detection algorithm
-// analyzes audio buffer to find fundamental frequency using autocorrelation method
-bool autocorrelationAnalysis(const AudioBuffer* input, TuningResult* output) {
-    if (!input || !output || !input->validate()) {
-        safePrint("ERROR: Invalid input to autocorrelationAnalysis\n");
-        return false;
+// --- MODIFIED: PASS 1 - AUTOCORRELATION (COARSE PITCH) ---
+// This function performs a fast, rough analysis to find an approximate period.
+// It is less accurate than YIN but quickly narrows down the search area.
+int findCoarsePeriodAC(const AudioBuffer* input, TuningResult* result) {
+    if (!input || !result || !input->validate() || input->rmsLevel < 0.01f) {
+        return 0; // Return 0 if signal is invalid or too quiet
     }
-    
-    // record processing start time
-    uint64_t startTime = esp_timer_get_time();
-    
-    // copy timing information from input
-    output->bufferID = input->bufferID;
-    output->captureTime = input->captureTime;
-    
-    // check if audio signal is strong enough for analysis
-    // very quiet signals often give unreliable pitch detection
-    if (input->rmsLevel < 0.01f) {
-        safePrintf("Signal too quiet for analysis: RMS=%.4f\n", input->rmsLevel);
-        return false;
-    }
-    
-    // autocorrelation variables
+
+    // record timing for autocorrelation start
+    result->acStartTime = esp_timer_get_time();
+    printTiming("ac start", result->bufferID, result->acStartTime, result->captureTime);
+
     float bestCorrelation = 0.0f;
     int bestPeriod = 0;
-    
-    // search for the best autocorrelation peak within period range
-    // period corresponds to fundamental frequency: freq = samplerate / period
-    for (int period = MIN_PERIOD; period <= MAX_PERIOD && period < input->sampleCount / 2; period++) {
+
+    for (int period = MIN_PERIOD; period <= MAX_PERIOD; period++) {
         float correlation = 0.0f;
         float energy1 = 0.0f;
         float energy2 = 0.0f;
-        
-        // calculate autocorrelation for this period (lag)
-        // compare signal with itself shifted by 'period' samples
         int numSamples = input->sampleCount - period;
+
         for (int i = 0; i < numSamples; i++) {
             float sample1 = input->samples[i];
             float sample2 = input->samples[i + period];
-            
-            correlation += sample1 * sample2;  // cross-correlation
-            energy1 += sample1 * sample1;      // energy of first segment
-            energy2 += sample2 * sample2;      // energy of second segment
+            correlation += sample1 * sample2;
+            energy1 += sample1 * sample1;
+            energy2 += sample2 * sample2;
         }
-        
-        // normalize correlation by the geometric mean of energies
-        // this prevents loud signals from dominating correlation values
+
         float totalEnergy = sqrtf(energy1 * energy2);
         if (totalEnergy > 0.0f) {
             correlation /= totalEnergy;
         }
-        
-        // check if this is the best correlation found so far
+
         if (correlation > bestCorrelation) {
             bestCorrelation = correlation;
             bestPeriod = period;
         }
     }
-    
-    // verify that we found a strong enough correlation peak
-    if (bestCorrelation < CORRELATION_THRESHOLD || bestPeriod == 0) {
-        safePrintf("No strong correlation found: best=%.3f, threshold=%.3f\n", 
-                  bestCorrelation, CORRELATION_THRESHOLD);
+
+    // record timing for autocorrelation end
+    result->acEndTime = esp_timer_get_time();
+    printTiming("ac end", result->bufferID, result->acEndTime, result->captureTime);
+
+    if (bestCorrelation > CORRELATION_THRESHOLD) {
+        return bestPeriod;
+    }
+
+    return 0; // No confident coarse period found
+}
+
+// --- MODIFIED: PASS 2 - YIN ALGORITHM (REFINED PITCH) ---
+// This function performs the YIN algorithm on the audio buffer.
+// It uses the hintedPeriod from the first pass to constrain its search,
+// making it much faster while providing higher accuracy and octave reliability.
+bool yinAnalysis(const AudioBuffer* input, TuningResult* output, int hintedPeriod) {
+    if (!input || !output || !input->validate() || hintedPeriod == 0) {
         return false;
     }
+
+    // record timing for yin start
+    output->yinStartTime = esp_timer_get_time();
+    printTiming("yin start", output->bufferID, output->yinStartTime, output->captureTime);
+
+    output->bufferID = input->bufferID;
+    output->captureTime = input->captureTime;
     
-    // convert period to frequency
-    // frequency = sample_rate / period_in_samples
-    output->frequency = (float)I2S_SAMPLE_RATE / (float)bestPeriod;
+    // YIN works on a buffer of difference values. Allocate on stack since it's small.
+    float yinBuffer[MAX_PERIOD + 1];
+
+    // Define the search window around the hinted period
+    int searchMin = hintedPeriod * (1.0f - YIN_SEARCH_WINDOW);
+    int searchMax = hintedPeriod * (1.0f + YIN_SEARCH_WINDOW);
+
+    // Clamp search window to valid period range
+    if (searchMin < MIN_PERIOD) searchMin = MIN_PERIOD;
+    if (searchMax > MAX_PERIOD) searchMax = MAX_PERIOD;
+
+    // Step 2: Calculate the difference function d(tau)
+    for (int tau = searchMin; tau <= searchMax; tau++) {
+        float diff = 0.0f;
+        for (int i = 0; i < input->sampleCount - tau; i++) {
+            float delta = input->samples[i] - input->samples[i + tau];
+            diff += delta * delta;
+        }
+        yinBuffer[tau] = diff;
+    }
+
+    // Step 3: Calculate the cumulative mean normalized difference function d'(tau)
+    float runningSum = 0.0f;
+    yinBuffer[searchMin] = 1.0f; // d'(0) is always 1
+
+    for (int tau = searchMin + 1; tau <= searchMax; tau++) {
+        runningSum += yinBuffer[tau];
+        if (runningSum > 0.0f) {
+            yinBuffer[tau] *= tau / runningSum;
+        } else {
+            yinBuffer[tau] = 1.0f;
+        }
+    }
+
+    // Step 4: Find the first dip below the absolute threshold
+    int period = 0;
+    for (int tau = searchMin; tau <= searchMax; tau++) {
+        if (yinBuffer[tau] < YIN_THRESHOLD) {
+            period = tau;
+            break;
+        }
+    }
     
-    // calculate confidence based on correlation strength
-    // stronger correlation = higher confidence in the result
-    output->confidence = fminf(bestCorrelation, 1.0f);
+    // If no dip is found, analysis fails
+    if (period == 0) {
+        return false;
+    }
+
+    // Step 5: Parabolic Interpolation for higher accuracy
+    float betterPeriod;
+    if (period > MIN_PERIOD && period < MAX_PERIOD) {
+        float y_minus = yinBuffer[period - 1];
+        float y_center = yinBuffer[period];
+        float y_plus = yinBuffer[period + 1];
+        
+        float p = (y_plus - y_minus) / (2.0f * (2.0f * y_center - y_plus - y_minus));
+        betterPeriod = (float)period + p;
+    } else {
+        betterPeriod = (float)period;
+    }
     
-    // determine musical note name from frequency
+    // Final result calculation - no confidence needed
+    output->frequency = (float)I2S_SAMPLE_RATE / betterPeriod;
     convertFrequencyToNote(output->frequency, output->noteName, sizeof(output->noteName));
-    
-    // calculate cents offset from perfect pitch
     output->centsOffset = calculateCentsOffset(output->frequency);
-    
-    // record processing completion time
-    output->processTime = esp_timer_get_time();
-    
-    // mark result as valid
     output->isValid = true;
-    
-    // debug output showing analysis results
-    uint64_t processingTime = output->processTime - startTime;
-    safePrintf("Autocorr: Period=%d, Freq=%.1fHz, Corr=%.3f, Time=%lluμs\n",
-              bestPeriod, output->frequency, bestCorrelation, processingTime);
-    
+
+    // record timing for yin end
+    output->yinEndTime = esp_timer_get_time();
+    printTiming("yin end", output->bufferID, output->yinEndTime, output->captureTime);
+
     return output->validate();
 }
+
 
 // convert frequency to musical note name
 // determines the closest musical note and stores it as a string
@@ -466,22 +857,59 @@ float calculateCentsOffset(float frequency) {
     return centsOffset;
 }
 
-// display tuning results to user
-// shows frequency, note name, cents offset, and confidence
-void displayResult(const TuningResult* result) {
+// display tuning results on the gc9a01 round display
+// shows frequency, note name, cents offset
+void displayResult(const TuningResult* result, const AudioBuffer* buffer) {
     if (!result || !result->validate()) {
-        safePrint("ERROR: Invalid result in displayResult\n");
+        // invalid result - clear display to show no signal
+        if (displayState.lastNoteName[0] != '\0') {
+            updateTunerDisplay("--", 0.0f, nullptr);
+            displayState.lastNoteName[0] = '\0';
+        }
         return;
     }
     
-    // calculate total latency from capture to display
-    uint64_t totalLatency = result->processTime - result->captureTime;
+    // check queue depth - skip expensive display updates if falling behind
+    UBaseType_t queueDepth = uxQueueMessagesWaiting(audioQueue);
+    bool skipDisplayUpdate = (queueDepth > 2); // skip if more than 2 buffers waiting
     
-    // display comprehensive tuning information
-    // note: in final version this will be replaced with gc9a01 graphics
-    safePrintf("♪ Buffer %lu: %s %.1fHz %+.1f cents (%.0f%% conf) lat=%lluμs\n",
-              result->bufferID, result->noteName, result->frequency,
-              result->centsOffset, result->confidence * 100.0f, totalLatency);
+    // make a copy of result so we can modify timing fields
+    TuningResult mutableResult = *result;
+    
+    // check if display needs updating
+    // only update if something changed to reduce flicker
+    bool needsUpdate = false;
+    
+    if (strcmp(result->noteName, displayState.lastNoteName) != 0) {
+        needsUpdate = true;
+    }
+    
+    if (fabs(result->centsOffset - displayState.lastCentsOffset) > 2.0f) { // increased threshold
+        needsUpdate = true;
+    }
+    
+    // update display if needed and not skipping
+    if ((needsUpdate || displayState.needsFullRedraw) && !skipDisplayUpdate) {
+        updateTunerDisplay(result->noteName, result->centsOffset, &mutableResult);
+        displayState.lastUpdateTime = millis();
+        
+        // update tracking after successful display
+        strcpy(displayState.lastNoteName, result->noteName);
+        displayState.lastCentsOffset = result->centsOffset;
+    } else if (skipDisplayUpdate) {
+        // still record timing even if we skip display for accurate measurements
+        mutableResult.displayStartTime = esp_timer_get_time();
+        mutableResult.displayEndTime = mutableResult.displayStartTime + 1000; // 1ms fake time
+        printTiming("display skipped", mutableResult.bufferID, mutableResult.displayEndTime, mutableResult.captureTime);
+    }
+    
+    // print comprehensive timing summary for this buffer
+    if (buffer) {
+        printTimingSummary(&mutableResult, buffer);
+    }
+    
+    // calculate total latency from capture to display end
+    uint64_t totalLatency = mutableResult.displayEndTime - result->captureTime;
     
     // update performance statistics
     updateStats(totalLatency);
@@ -534,6 +962,10 @@ void audioTask(void* parameter) {
                 continue;
             }
             
+            // record timing for queue send
+            buffer->queueSendTime = esp_timer_get_time();
+            printTiming("queue send", buffer->bufferID, buffer->queueSendTime, buffer->captureTime);
+            
             // send buffer pointer to processing task
             // we send pointer not full struct because copying 1024 floats is slow
             if (xQueueSend(audioQueue, &buffer, 0) != pdPASS) {
@@ -576,10 +1008,8 @@ void audioTask(void* parameter) {
     }
 }
 
-// core 1: combined processing and display task
-// this runs on core 1 and does pitch detection analysis then displays results
-// combining both operations eliminates communication overhead and ensures latest results
-
+// --- MODIFIED: Combined processing and display task with two-pass analysis ---
+// This task now orchestrates the two-pass pitch detection.
 void processingAndDisplayTask(void* parameter) {
     vTaskDelay(pdMS_TO_TICKS(150)); // wait for system startup
     
@@ -589,8 +1019,6 @@ void processingAndDisplayTask(void* parameter) {
     while (true) {
         AudioBuffer* inputBuffer;
         
-        // wait for audio data from capture task
-        // portmax_delay means wait forever until data arrives
         if (xQueueReceive(audioQueue, &inputBuffer, portMAX_DELAY) == pdPASS) {
             if (!inputBuffer || !inputBuffer->validate()) {
                 safePrint("ERROR: Received invalid buffer in processing task\n");
@@ -601,25 +1029,44 @@ void processingAndDisplayTask(void* parameter) {
                 continue;
             }
             
-            // create result structure for our findings
+            // record timing for queue receive
+            inputBuffer->queueReceiveTime = esp_timer_get_time();
+            printTiming("queue receive", inputBuffer->bufferID, inputBuffer->queueReceiveTime, inputBuffer->captureTime);
+            
+            bool analysisSuccess = false;
             TuningResult result;
             
-            // do the actual frequency analysis using autocorrelation
-            if (autocorrelationAnalysis(inputBuffer, &result)) {
-                // immediately display the results (no queue needed - same core)
-                displayResult(&result);
-                __atomic_fetch_add(&processedCount, 1, __ATOMIC_SEQ_CST);
-            } else {
-                // analysis failed - skip this buffer but don't crash
-                safePrintf("Analysis failed for buffer %lu\n", inputBuffer->bufferID);
+            // record timing for processing start
+            result.processStartTime = esp_timer_get_time();
+            result.bufferID = inputBuffer->bufferID;
+            result.captureTime = inputBuffer->captureTime;
+            printTiming("process start", result.bufferID, result.processStartTime, result.captureTime);
+
+            // --- PASS 1: Get a coarse period estimate ---
+            int coarsePeriod = findCoarsePeriodAC(inputBuffer, &result);
+
+            // If the first pass found a potential period, proceed to the second pass
+            if (coarsePeriod > 0) {
+                // --- PASS 2: Use YIN for a refined analysis ---
+                if (yinAnalysis(inputBuffer, &result, coarsePeriod)) {
+                    displayResult(&result, inputBuffer);
+                    __atomic_fetch_add(&processedCount, 1, __ATOMIC_SEQ_CST);
+                    analysisSuccess = true;
+                }
             }
             
-            // always clean up input buffer memory
+            // If any part of the analysis failed, clear the display
+            if (!analysisSuccess) {
+                displayResult(nullptr, inputBuffer);
+            }
+            
+            // Always clean up input buffer memory
             inputBuffer->cleanup();
             delete inputBuffer;
         }
     }
 }
+
 
 // setup function runs once at startup
 // initializes all the freertos objects and starts tasks
@@ -628,23 +1075,45 @@ void setup() {
     Serial.begin(115200);
     delay(2000);
     
-    Serial.println("=== ESP32-S3 Multi-Core Audio Tuner with Autocorrelation ===");
+    Serial.println("=== ESP32-S3 Multi-Core Voice Tuner with GC9A01 Display ===");
     Serial.printf("CPU Frequency: %d MHz\n", getCpuFrequencyMhz());
     Serial.printf("Free Heap: %lu bytes\n", (uint32_t)esp_get_free_heap_size());
+    Serial.printf("Timing Debug: %s\n", ENABLE_TIMING_DEBUG ? "ENABLED" : "DISABLED");
     
-    // initialize i2s for audio capture first
+    // initialize display first so user sees startup progress
+    initDisplay();
+    
+    // show startup message on display
+    tft.fillScreen(TFT_BLACK);
+    tft.setTextColor(TFT_WHITE);
+    tft.setTextSize(2);
+    tft.drawCenterString("VOICE TUNER", 120, 80);
+    tft.setTextSize(1);
+    tft.drawCenterString("Initializing...", 120, 120);
+    
+    // initialize i2s for audio capture
     if (!initI2S()) {
         Serial.println("FATAL: I2S initialization failed");
+        tft.setTextColor(TFT_RED);
+        tft.drawCenterString("I2S FAILED!", 120, 140);
         return;
     }
+    
+    // update display to show i2s success
+    tft.setTextColor(TFT_GREEN);
+    tft.drawCenterString("I2S OK", 120, 140);
+    delay(500);
     
     // create mutexes before anything else
     // these prevent cores from interfering with each other
     serialMutex = xSemaphoreCreateMutex();
     statsMutex = xSemaphoreCreateMutex();
+    displayMutex = xSemaphoreCreateMutex();
     
-    if (!serialMutex || !statsMutex) {
+    if (!serialMutex || !statsMutex || !displayMutex) {
         Serial.println("FATAL: Failed to create mutexes");
+        tft.setTextColor(TFT_RED);
+        tft.drawCenterString("MUTEX FAILED!", 120, 160);
         return;
     }
     
@@ -656,6 +1125,8 @@ void setup() {
     
     if (!audioQueue) {
         Serial.println("FATAL: Failed to create audio queue");
+        tft.setTextColor(TFT_RED);
+        tft.drawCenterString("QUEUE FAILED!", 120, 160);
         return;
     }
     
@@ -671,11 +1142,19 @@ void setup() {
     
     if (result1 != pdPASS || result2 != pdPASS) {
         Serial.println("FATAL: Failed to create tasks");
+        tft.setTextColor(TFT_RED);
+        tft.drawCenterString("TASK FAILED!", 120, 160);
         return;
     }
     
     Serial.println("All tasks created successfully");
-    Serial.println("System starting with I2S capture and autocorrelation analysis...\n");
+    Serial.println("System starting with two-pass (AC + YIN) analysis...\n");
+    
+    // final delay before showing main interface
+    delay(1000);
+    
+    // draw the main tuner interface
+    drawTunerInterface();
 }
 
 // main loop does almost nothing
