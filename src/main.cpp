@@ -3,7 +3,6 @@
 #include <driver/i2s.h>
 #define LGFX_USE_V1
 #include <LovyanGFX.hpp>
-#include "esp_dsp.h"
 
 // timing debug control - set to 1 to enable detailed timing output
 #define ENABLE_TIMING_DEBUG 1
@@ -18,7 +17,7 @@
 #define TFT_BLK     6   // backlight control
 
 // audio buffer structure for heap-allocated sample data
-// uses heap allocation because audio buffers are large (1024+ samples)
+// uses heap allocation because audio buffers are large (2048+ samples)
 struct AudioBuffer {
     float* samples;                // pointer to actual audio data stored in heap memory
     uint64_t captureTime;          // timestamp when audio was recorded (in microseconds)
@@ -26,7 +25,7 @@ struct AudioBuffer {
     uint64_t queueSendTime;        // timestamp when sent to queue (in microseconds)
     uint64_t queueReceiveTime;     // timestamp when received from queue (in microseconds)
     uint32_t bufferID;             // unique number to track this specific buffer
-    uint16_t sampleCount;          // how many audio samples we have (max 1024)
+    uint16_t sampleCount;          // how many audio samples we have (max 2048)
     float amplitude;               // maximum amplitude detected in this buffer
     float rmsLevel;                // rms level for audio monitoring
     bool isValid;                  // flag to check if this buffer got corrupted
@@ -38,7 +37,7 @@ struct AudioBuffer {
     
     // allocate memory for audio samples on the heap
     // heap is better than stack for large arrays because stack is limited
-    bool init(uint16_t size = 1024) {
+    bool init(uint16_t size = 2048) {
         if (samples) free(samples); // clean up any existing memory first
         samples = (float*)malloc(size * sizeof(float));
         if (samples) {
@@ -100,11 +99,12 @@ struct TuningResult {
 
 // function declarations for audio processing and analysis
 bool captureRealAudio(AudioBuffer* buffer);
-int findCoarsePeriodHPS(const AudioBuffer* input, TuningResult* result);
+int findCoarsePeriodYIN(const AudioBuffer* input, TuningResult* result);
 bool yinAnalysis(const AudioBuffer* input, TuningResult* output, int hintedPeriod);
 void convertFrequencyToNote(float frequency, char* noteName, size_t nameSize);
 float calculateCentsOffset(float frequency);
 void displayResult(const TuningResult* result, const AudioBuffer* buffer);
+
 
 // display function declarations
 void initDisplay();
@@ -127,6 +127,8 @@ bool safePrintf(const char* format, ...);
 uint32_t getNextBufferID();
 void updateStats(uint64_t latency);
 bool initI2S();
+
+
 
 // timing helper function to calculate milliseconds from capture start
 // converts microsecond timestamps to milliseconds relative to capture time
@@ -159,7 +161,7 @@ void printTimingSummary(const TuningResult* result, const AudioBuffer* buffer) {
     float totalMs = calculateTimingMs(result->displayEndTime, buffer->captureTime);
     
     safePrintf("=== TIMING SUMMARY buffer %lu ===\n", buffer->bufferID);
-    safePrintf("capture: %.2f ms | queue: %.2f ms | hps: %.2f ms | yin: %.2f ms | display: %.2f ms | total: %.2f ms\n",
+    safePrintf("capture: %.2f ms | queue: %.2f ms | yin coarse: %.2f ms | yin fine: %.2f ms | display: %.2f ms | total: %.2f ms\n",
               captureMs, queueMs, hpsMs, yinMs, displayMs, totalMs);
     safePrintf("note: %s | cents: %.1f | freq: %.1f hz\n", 
               result->noteName, result->centsOffset, result->frequency);
@@ -238,23 +240,22 @@ struct DisplayState {
 // i2s configuration for inmp441 microphone
 // esp32-s3 supports multiple i2s ports, we use i2s_num_0
 #define I2S_PORT          I2S_NUM_0
-#define I2S_SAMPLE_RATE   16000
+#define I2S_SAMPLE_RATE   48000
 #define I2S_SAMPLE_BITS   I2S_BITS_PER_SAMPLE_32BIT
 #define I2S_CHANNELS      I2S_CHANNEL_MONO
-#define I2S_DMA_BUF_COUNT 8        // 16 buffers
-#define I2S_DMA_BUF_LEN   128     // samples per dma buffer
+#define I2S_DMA_BUF_COUNT 32        // 16 buffers
+#define I2S_DMA_BUF_LEN   64     // samples per dma buffer
+// 415.305 Hz reads as -7 cents
+// Detected frequency = 415.305 * 2^(-7/1200) = 413.88 Hz
+// Correction factor = 415.305 / 413.88 = 1.0034
+
+#define AUDIO_CALIBRATION_FACTOR 1.0000f  // based on real audio test
 
 // gpio pin assignments for inmp441
 #define I2S_SCK_PIN       13       // serial clock (bit clock)
 #define I2S_WS_PIN        12       // word select (left/right clock)
 #define I2S_SD_PIN        11       // serial data (audio input)
 
-// hps (harmonic product spectrum) parameters for first pass analysis
-#define FFT_SIZE              512      // fft size for hps (power of 2, smaller = faster)
-#define MIN_FREQUENCY         40.0f    // minimum frequency to detect (~40hz = low bass)
-#define MAX_FREQUENCY         1200.0f  // maximum frequency to detect (~1200hz = high soprano)
-#define HPS_HARMONICS         4        // number of harmonics to multiply (2, 3, 4, 5)
-#define HPS_THRESHOLD         0.1f     // minimum hps value for valid detection
 
 // yin algorithm parameters for second pass analysis
 #define YIN_THRESHOLD         0.15f    // yin confidence threshold
@@ -648,7 +649,7 @@ bool captureRealAudio(AudioBuffer* buffer) {
         
         // normalize to float range [-1.0, +1.0]
         // divide by maximum 24-bit value (8388608 = 2^23)
-        float gain = 2.5f;
+        float gain = 3.0f;
         buffer->samples[i] = (float)sample24 / 8388608.0f * gain;
         
         // track maximum amplitude for monitoring
@@ -681,117 +682,92 @@ bool captureRealAudio(AudioBuffer* buffer) {
     return true;
 }
 
-// first pass: hps (harmonic product spectrum) for coarse frequency estimation
-// performs fast harmonic analysis to find an approximate frequency
-int findCoarsePeriodHPS(const AudioBuffer* input, TuningResult* result) {
+// first pass: coarse yin for fast period estimation
+// optimized for speed rather than precision to replace hps functionality
+int findCoarsePeriodYIN(const AudioBuffer* input, TuningResult* result) {
     if (!input || !result || !input->validate() || input->rmsLevel < 0.01f) {
         return 0; // return 0 if signal is invalid or too quiet
     }
 
-    // record timing for hps start
-    result->acStartTime = esp_timer_get_time(); // reusing ac timing fields for hps
-    printTiming("hps start", result->bufferID, result->acStartTime, result->captureTime);
+    // record timing for coarse yin start
+    result->acStartTime = esp_timer_get_time(); // reusing ac timing fields
+    printTiming("coarse yin start", result->bufferID, result->acStartTime, result->captureTime);
 
-    // prepare fft input buffer - must be interleaved real/imaginary format
-    // array size is 2*FFT_SIZE for N complex pairs
-    float fft_data[FFT_SIZE * 2];
-    memset(fft_data, 0, FFT_SIZE * 2 * sizeof(float));
+    // define search parameters - same range as fine yin but optimized for speed
+    int MIN_YIN_PERIOD = 13;   // ~1230hz at 16khz sample rate
+    int MAX_YIN_PERIOD = 400;  // ~40hz at 16khz sample rate
     
-    // copy audio samples and apply hanning window to reduce spectral leakage
-    // format: real[0], imag[0], real[1], imag[1], ...
-    int samples_to_copy = (input->sampleCount < FFT_SIZE) ? input->sampleCount : FFT_SIZE;
-    for (int i = 0; i < samples_to_copy; i++) {
-        // hanning window: 0.5 * (1 - cos(2*pi*i/N))
-        float window = 0.5f * (1.0f - cosf(2.0f * M_PI * i / (float)(samples_to_copy - 1)));
-        fft_data[i * 2 + 0] = input->samples[i] * window;  // real part
-        fft_data[i * 2 + 1] = 0.0f;                        // imaginary part (zero for real input)
+    // speed optimizations for first pass
+    const float COARSE_THRESHOLD = 0.25f;  // more relaxed threshold than fine pass
+    const int COARSE_SAMPLES = 512;
+    
+    // determine actual sample count to use (limited for speed)
+    int samplesToUse = (input->sampleCount < COARSE_SAMPLES) ? input->sampleCount : COARSE_SAMPLES;
+    
+    // allocate difference buffer on stack (much smaller than hps fft buffer)
+    float yinBuffer[MAX_YIN_PERIOD + 1];
+    memset(yinBuffer, 0, sizeof(yinBuffer));
+    
+    // step 1: calculate difference function d(tau) - check every tau value for accuracy
+    for (int tau = MIN_YIN_PERIOD; tau <= MAX_YIN_PERIOD; tau++) {
+        float diff = 0.0f;
+        int validSamples = samplesToUse - tau;
+        
+        // skip if we don't have enough samples for this tau
+        if (validSamples < 64) continue;
+        
+        // calculate squared difference for this lag
+        for (int i = 0; i < validSamples; i++) {
+            float delta = input->samples[i] - input->samples[i + tau];
+            diff += delta * delta;
+        }
+        yinBuffer[tau] = diff;
     }
-
-    // initialize esp-dsp fft (call once globally, but safe to call multiple times)
-    esp_err_t ret = dsps_fft2r_init_fc32(NULL, CONFIG_DSP_MAX_FFT_SIZE);
-    if (ret != ESP_OK) {
-        safePrint("ERROR: FFT initialization failed\n");
-        return 0;
-    }
     
-    // perform real fft - modifies fft_data in place
-    ret = dsps_fft2r_fc32(fft_data, FFT_SIZE);
-    if (ret != ESP_OK) {
-        safePrint("ERROR: FFT execution failed\n");
-        return 0;
-    }
+    // step 2: calculate cumulative mean normalized difference d'(tau)
+    float runningSum = 0.0f;
+    yinBuffer[MIN_YIN_PERIOD] = 1.0f; // d'(0) equivalent
     
-    // bit reversal is required for correct frequency order
-    dsps_bit_rev_fc32(fft_data, FFT_SIZE);
-    
-    // calculate magnitude spectrum from complex fft output
-    float magnitude[FFT_SIZE/2 + 1];
-    for (int i = 0; i < FFT_SIZE/2 + 1; i++) {
-        if (i == 0) {
-            // dc component (real only)
-            magnitude[i] = fabsf(fft_data[0]);
-        } else if (i == FFT_SIZE/2) {
-            // nyquist component (real only)
-            magnitude[i] = fabsf(fft_data[1]);
+    for (int tau = MIN_YIN_PERIOD + 1; tau <= MAX_YIN_PERIOD; tau++) {
+        runningSum += yinBuffer[tau];
+        if (runningSum > 0.0f) {
+            yinBuffer[tau] *= tau / runningSum;
         } else {
-            // normal bins (complex): sqrt(real^2 + imag^2)
-            float real = fft_data[i * 2];
-            float imag = fft_data[i * 2 + 1];
-            magnitude[i] = sqrtf(real * real + imag * imag);
+            yinBuffer[tau] = 1.0f;
         }
     }
     
-    // calculate frequency resolution
-    float freq_resolution = (float)I2S_SAMPLE_RATE / (float)FFT_SIZE; // hz per bin
+    // step 3: find first dip below threshold (early termination for speed)
+    int bestPeriod = 0;
+    float bestValue = 1.0f;
     
-    // convert frequency limits to bin indices
-    int min_bin = (int)(MIN_FREQUENCY / freq_resolution);
-    int max_bin = (int)(MAX_FREQUENCY / freq_resolution);
-    if (max_bin >= FFT_SIZE/2) max_bin = FFT_SIZE/2 - 1;
-    
-    // find fundamental frequency using harmonic product spectrum
-    float best_hps_value = 0.0f;
-    int best_frequency_bin = 0;
-    
-    for (int bin = min_bin; bin <= max_bin; bin++) {
-        float hps_value = magnitude[bin]; // start with fundamental
-        
-        // multiply with harmonics (2f, 3f, 4f, etc.)
-        for (int harmonic = 2; harmonic <= HPS_HARMONICS; harmonic++) {
-            int harmonic_bin = bin * harmonic;
-            if (harmonic_bin < FFT_SIZE/2) {
-                hps_value *= magnitude[harmonic_bin];
-            } else {
-                // harmonic is beyond nyquist frequency, reduce hps value
-                hps_value *= 0.1f;
-            }
+    for (int tau = MIN_YIN_PERIOD; tau <= MAX_YIN_PERIOD; tau++) {
+        if (yinBuffer[tau] < COARSE_THRESHOLD) {
+            bestPeriod = tau;
+            break; // early termination - take first good result for speed
         }
         
-        if (hps_value > best_hps_value) {
-            best_hps_value = hps_value;
-            best_frequency_bin = bin;
+        // also track the overall best value in case we don't find any below threshold
+        if (yinBuffer[tau] < bestValue) {
+            bestValue = yinBuffer[tau];
+            bestPeriod = tau;
         }
     }
-
-    // record timing for hps end
+    
+    // record timing for coarse yin end
     result->acEndTime = esp_timer_get_time();
-    printTiming("hps end", result->bufferID, result->acEndTime, result->captureTime);
-
-    // validate hps result
-    if (best_hps_value < HPS_THRESHOLD || best_frequency_bin == 0) {
-        return 0; // no confident detection
+    printTiming("coarse yin end", result->bufferID, result->acEndTime, result->captureTime);
+    
+    // validate result - if no period found or value too high, return 0
+    if (bestPeriod == 0 || bestValue > 0.5f) {
+        return 0;
     }
     
-    // convert frequency back to period for yin algorithm
-    float detected_frequency = best_frequency_bin * freq_resolution;
-    int detected_period = (int)((float)I2S_SAMPLE_RATE / detected_frequency);
-    
-    // clamp period to reasonable range for yin
-    if (detected_period < 13) detected_period = 13;
-    if (detected_period > 400) detected_period = 400;
-    
-    return detected_period;
+    // return the coarse period estimate (no interpolation for speed)
+    return bestPeriod;
 }
+
+
 
 // second pass: yin algorithm for refined pitch detection
 // uses the hintedPeriod from the first pass to constrain its search
@@ -873,7 +849,7 @@ bool yinAnalysis(const AudioBuffer* input, TuningResult* output, int hintedPerio
     }
     
     // final result calculation
-    output->frequency = (float)I2S_SAMPLE_RATE / betterPeriod;
+    output->frequency = ((float)I2S_SAMPLE_RATE / betterPeriod) * AUDIO_CALIBRATION_FACTOR;
     convertFrequencyToNote(output->frequency, output->noteName, sizeof(output->noteName));
     output->centsOffset = calculateCentsOffset(output->frequency);
     output->isValid = true;
@@ -1011,7 +987,7 @@ void audioTask(void* parameter) {
             }
             
             // allocate memory for audio samples
-            if (!buffer->init(1024)) {
+            if (!buffer->init(2048)) {
                 safePrint("ERROR: Failed to initialize audio buffer\n");
                 delete buffer;
                 vTaskDelay(pdMS_TO_TICKS(10));
@@ -1035,7 +1011,7 @@ void audioTask(void* parameter) {
             printTiming("queue send", buffer->bufferID, buffer->queueSendTime, buffer->captureTime);
             
             // send buffer pointer to processing task
-            // we send pointer not full struct because copying 1024 floats is slow
+            // we send pointer not full struct because copying 2048 floats is slow
             if (xQueueSend(audioQueue, &buffer, 0) != pdPASS) {
                 // queue is full, drop oldest buffer to make room
                 AudioBuffer* oldBuffer;
@@ -1111,7 +1087,7 @@ void processingAndDisplayTask(void* parameter) {
             printTiming("process start", result.bufferID, result.processStartTime, result.captureTime);
 
             // pass 1: get a coarse period estimate using hps
-            int coarsePeriod = findCoarsePeriodHPS(inputBuffer, &result);
+            int coarsePeriod = findCoarsePeriodYIN(inputBuffer, &result);
 
             // if the first pass found a potential period, proceed to the second pass
             if (coarsePeriod > 0) {
@@ -1143,7 +1119,6 @@ void setup() {
     
     Serial.println("=== ESP32-S3 Multi-Core Voice Tuner with GC9A01 Display ===");
     Serial.printf("CPU Frequency: %d MHz\n", getCpuFrequencyMhz());
-    Serial.printf("Free Heap: %lu bytes\n", (uint32_t)esp_get_free_heap_size());
     Serial.printf("Timing Debug: %s\n", ENABLE_TIMING_DEBUG ? "ENABLED" : "DISABLED");
     
     // initialize display first so user sees startup progress
@@ -1184,7 +1159,6 @@ void setup() {
     }
     
     Serial.println("Mutexes created successfully");
-    
     // create queues for inter-task communication
     // size 4 means we can buffer up to 4 items before blocking
     audioQueue = xQueueCreate(4, sizeof(AudioBuffer*));
