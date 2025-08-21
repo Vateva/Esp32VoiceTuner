@@ -30,4 +30,14 @@ bool safePrintf(const char* format, ...);
 uint32_t getNextBufferID();
 void updateStats(uint64_t latency);
 
+// confidence calculation and smoothing functions
+float calculateYinConfidence(float yinValue);
+float calculateSignalConfidence(float rmsLevel);
+float calculateFrequencyStability(SmoothingState* state);
+float calculateOverallConfidence(const TuningResult* result, const AudioBuffer* buffer, 
+                                SmoothingState* state);
+float calculateDynamicAlpha(float confidence);
+bool applySmoothingFilter(TuningResult* result, const AudioBuffer* buffer, 
+                         SmoothingState* state);
+
 #endif // UTILITIES_H

@@ -4,7 +4,7 @@
 
 // global display instance
 LGFX tft;
-DisplayState displayState = {"", 0.0f, 0, true, 0, 0, false};
+DisplayState displayState = {"", 0.0f, 0, true, 0, 0, false, SmoothingState()};
 
 // lovyangfx spi bus configuration
 LGFX::LGFX(void) {
@@ -271,6 +271,10 @@ void drawTunerInterface() {
   displayState.staticCirclesDrawn = false;
   displayState.lastDynamicRadius = 0;
   displayState.needsFullRedraw = false;
+  
+  // reset smoothing state when interface redraws
+  displayState.smoothing.reset();
+  
   drawStaticTunerElements();
 }
 
@@ -348,13 +352,15 @@ void updateTunerDisplay(const char *note, int cents, TuningResult *result,
   }
 }
 
-// main display update with queue management
+// main display update with confidence-based smoothing
 void displayResult(const TuningResult *result, const AudioBuffer *buffer) {
   // handle invalid result
   if (!result || !result->validate()) {
     if (displayState.lastNoteName[0] != '\0') {
       updateTunerDisplay("--", 0.0f, nullptr, false);
       displayState.lastNoteName[0] = '\0';
+      // reset smoothing on signal loss
+      displayState.smoothing.reset();
     }
     return;
   }
@@ -363,41 +369,54 @@ void displayResult(const TuningResult *result, const AudioBuffer *buffer) {
   UBaseType_t queueDepth = uxQueueMessagesWaiting(audioQueue);
   bool skipDisplayUpdate = (queueDepth > 2);
 
-  TuningResult mutableResult = *result;
+  // create mutable copy for smoothing
+  TuningResult smoothedResult = *result;
 
-  // determine if display update needed
+  // apply confidence-based ema smoothing
+  bool smoothingSuccess = applySmoothingFilter(&smoothedResult, buffer, &displayState.smoothing);
+  
+  if (!smoothingSuccess) {
+    // low confidence reading - don't update display, but still track in smoothing
+    if (ENABLE_TIMING_DEBUG) {
+      safePrintf("smoothing rejected result: conf=%.3f, freq=%.1f\n", 
+                smoothedResult.overallConfidence, smoothedResult.frequency);
+    }
+    return;
+  }
+
+  // determine if display update needed (using smoothed values)
   bool needsUpdate = false;
 
-  if (strcmp(result->noteName, displayState.lastNoteName) != 0) {
+  if (strcmp(smoothedResult.noteName, displayState.lastNoteName) != 0) {
     needsUpdate = true;
   }
 
-  if (abs(result->centsOffset - displayState.lastCentsOffset) > 2) {
+  if (abs(smoothedResult.centsOffset - displayState.lastCentsOffset) > 2) {
     needsUpdate = true;
   }
 
   // perform display update if needed and not skipping
   if ((needsUpdate || displayState.needsFullRedraw) && !skipDisplayUpdate) {
-    updateTunerDisplay(result->noteName, result->centsOffset, &mutableResult,
+    updateTunerDisplay(smoothedResult.noteName, smoothedResult.centsOffset, &smoothedResult,
                        true);
     displayState.lastUpdateTime = millis();
 
-    strcpy(displayState.lastNoteName, result->noteName);
-    displayState.lastCentsOffset = result->centsOffset;
+    strcpy(displayState.lastNoteName, smoothedResult.noteName);
+    displayState.lastCentsOffset = smoothedResult.centsOffset;
   } else if (skipDisplayUpdate) {
     // fake timing for skipped update
-    mutableResult.displayStartTime = esp_timer_get_time();
-    mutableResult.displayEndTime = mutableResult.displayStartTime + 1000;
-    printTiming("display skipped", mutableResult.bufferID,
-                mutableResult.displayEndTime, mutableResult.captureTime);
+    smoothedResult.displayStartTime = esp_timer_get_time();
+    smoothedResult.displayEndTime = smoothedResult.displayStartTime + 1000;
+    printTiming("display skipped", smoothedResult.bufferID,
+                smoothedResult.displayEndTime, smoothedResult.captureTime);
   }
 
-  // output timing summary
+  // output timing summary (use smoothed result for consistency)
   if (buffer) {
-    printTimingSummary(&mutableResult, buffer);
+    printTimingSummary(&smoothedResult, buffer);
   }
 
   // update performance statistics
-  uint64_t totalLatency = mutableResult.displayEndTime - result->captureTime;
+  uint64_t totalLatency = smoothedResult.displayEndTime - result->captureTime;
   updateStats(totalLatency);
 }

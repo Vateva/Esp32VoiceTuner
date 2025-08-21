@@ -6,6 +6,7 @@
 
 // debug output control
 #define ENABLE_TIMING_DEBUG 0
+#define ENABLE_CONFIDENCE_DEBUG 1
 
 // gc9a01 round display pins
 #define TFT_SCK     1   // spi clock
@@ -32,6 +33,13 @@
 // yin algorithm tuning
 #define YIN_THRESHOLD         0.15f    // detection confidence
 #define YIN_SEARCH_WINDOW     0.40f    // ±40% search range
+
+// smoothing configuration
+#define MIN_CONFIDENCE_THRESHOLD  0.15f  // minimum confidence for display update
+#define MIN_RMS_THRESHOLD        0.008f  // minimum signal level
+#define EMA_ALPHA_MIN            0.08f   // heavy smoothing for low confidence
+#define EMA_ALPHA_MAX            0.65f   // light smoothing for high confidence
+#define FREQUENCY_STABILITY_WINDOW 5     // samples for stability calculation
 
 // audio buffer with heap allocation
 struct AudioBuffer {
@@ -77,7 +85,7 @@ struct AudioBuffer {
     }
 };
 
-// pitch detection result
+// pitch detection result with confidence metrics
 struct TuningResult {
     float frequency;               // detected frequency
     char noteName[8];             // musical note name
@@ -93,16 +101,54 @@ struct TuningResult {
     uint32_t bufferID;            // source buffer id
     bool isValid;                 // result validity
     
+    // confidence metrics for smoothing
+    float yinConfidence;          // yin detection quality (0-1, higher better)
+    float harmonicConfidence;     // harmonic content score (0-1, higher better)
+    float signalConfidence;       // signal strength score (0-1, higher better)
+    float overallConfidence;      // weighted composite confidence (0-1)
+    
     TuningResult() : frequency(0), centsOffset(0), captureTime(0), 
                     processStartTime(0), acStartTime(0), acEndTime(0),
                     yinStartTime(0), yinEndTime(0), displayStartTime(0),
-                    displayEndTime(0), bufferID(0), isValid(false) {
+                    displayEndTime(0), bufferID(0), isValid(false),
+                    yinConfidence(0), harmonicConfidence(0), signalConfidence(0),
+                    overallConfidence(0) {
         memset(noteName, 0, sizeof(noteName));
     }
     
     // frequency range validation
     bool validate() const {
         return isValid && frequency >= 20.0f && frequency <= 20000.0f;
+    }
+};
+
+// smoothing state for temporal filtering
+struct SmoothingState {
+    float smoothedFrequency;        // ema smoothed frequency
+    float smoothedCents;            // ema smoothed cents deviation
+    float recentFrequencies[FREQUENCY_STABILITY_WINDOW];  // frequency history
+    int frequencyIndex;             // circular buffer index
+    int validSamples;               // number of valid samples in history
+    bool initialized;               // first measurement flag
+    uint32_t lastUpdateTime;        // timestamp of last update
+    float lastConfidence;           // previous confidence score
+    
+    SmoothingState() : smoothedFrequency(0), smoothedCents(0), frequencyIndex(0),
+                      validSamples(0), initialized(false), lastUpdateTime(0),
+                      lastConfidence(0) {
+        memset(recentFrequencies, 0, sizeof(recentFrequencies));
+    }
+    
+    // reset smoothing state
+    void reset() {
+        smoothedFrequency = 0;
+        smoothedCents = 0;
+        frequencyIndex = 0;
+        validSamples = 0;
+        initialized = false;
+        lastUpdateTime = 0;
+        lastConfidence = 0;
+        memset(recentFrequencies, 0, sizeof(recentFrequencies));
     }
 };
 
@@ -115,6 +161,7 @@ struct DisplayState {
     int lastDynamicRadius;
     uint32_t lastDynamicColor;
     bool staticCirclesDrawn;
+    SmoothingState smoothing;       // temporal smoothing state
 };
 
 // performance monitoring

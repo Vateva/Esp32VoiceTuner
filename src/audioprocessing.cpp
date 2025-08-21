@@ -420,6 +420,8 @@ bool yinAnalysis(const AudioBuffer* input, TuningResult* output, int hintedPerio
     }
     
     int bestPeriod = candidates[bestCandidateIndex].period;
+    float bestYinValue = candidates[bestCandidateIndex].yinValue;
+    float bestHarmonicScore = candidates[bestCandidateIndex].harmonicScore;
 
     // step 5: parabolic interpolation for sub-sample precision
     float betterPeriod;
@@ -441,14 +443,19 @@ bool yinAnalysis(const AudioBuffer* input, TuningResult* output, int hintedPerio
     output->centsOffset = calculateCentsOffset(output->frequency);
     output->isValid = true;
 
+    // store confidence metrics for smoothing (raw values, will be converted in utilities)
+    output->yinConfidence = bestYinValue;           // raw yin value (lower = better)
+    output->harmonicConfidence = bestHarmonicScore; // harmonic score (higher = better, 0-1)
+    // signalConfidence and overallConfidence calculated in utilities
+
     output->yinEndTime = esp_timer_get_time();
     printTiming("yin end", output->bufferID, output->yinEndTime, output->captureTime);
 
     // periodic debug output
     static uint32_t debugCounter = 0;
     if (ENABLE_TIMING_DEBUG && (debugCounter++ % 32) == 0) {
-        safePrintf("candidates found: %d, best period: %d, harmonic score: %.3f\n", 
-                  candidateCount, bestPeriod, candidates[bestCandidateIndex].harmonicScore);
+        safePrintf("candidates found: %d, best period: %d, yin: %.3f, harmonic: %.3f\n", 
+                  candidateCount, bestPeriod, bestYinValue, bestHarmonicScore);
     }
 
     return output->validate();
