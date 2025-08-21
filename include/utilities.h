@@ -5,7 +5,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
-// Thread-safe global variables
+// thread synchronization objects
 extern SemaphoreHandle_t serialMutex;
 extern SemaphoreHandle_t displayMutex;
 extern SemaphoreHandle_t statsMutex;
@@ -13,15 +13,15 @@ extern QueueHandle_t audioQueue;
 extern TaskHandle_t audioTaskHandle;
 extern TaskHandle_t processingTaskHandle;
 
-// Atomic counters
+// atomic counters for performance tracking
 extern volatile uint32_t bufferCounter;
 extern volatile uint32_t processedCount;
 extern volatile uint32_t droppedCount;
 
-// Performance statistics
+// performance statistics
 extern PerformanceStats stats;
 
-// Utility function declarations
+// utility functions
 float calculateTimingMs(uint64_t currentTime, uint64_t captureTime);
 void printTiming(const char* stage, uint32_t bufferID, uint64_t currentTime, uint64_t captureTime);
 void printTimingSummary(const TuningResult* result, const AudioBuffer* buffer);

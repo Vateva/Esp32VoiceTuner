@@ -4,56 +4,53 @@
 #include <Arduino.h>
 #include <driver/i2s.h>
 
-// ==================== DEBUG CONFIGURATION ====================
+// debug output control
 #define ENABLE_TIMING_DEBUG 0
 
-// ==================== DISPLAY PINS (GC9A01) ====================
-#define TFT_SCK     1   // SPI clock signal
-#define TFT_MOSI    2   // SPI data output (MOSI)
-#define TFT_CS      5   // Chip select (active low)
-#define TFT_DC      4   // Data/command control
-#define TFT_RST     3   // Hardware reset
-#define TFT_BLK     6   // Backlight control
+// gc9a01 round display pins
+#define TFT_SCK     1   // spi clock
+#define TFT_MOSI    2   // spi data out
+#define TFT_CS      5   // chip select
+#define TFT_DC      4   // data/command
+#define TFT_RST     3   // reset
+#define TFT_BLK     6   // backlight
 
-// ==================== I2S AUDIO CONFIGURATION ====================
+// i2s audio configuration
 #define I2S_PORT          I2S_NUM_0
 #define I2S_SAMPLE_RATE   48000
 #define I2S_SAMPLE_BITS   I2S_BITS_PER_SAMPLE_32BIT
 #define I2S_CHANNELS      I2S_CHANNEL_MONO
 #define I2S_DMA_BUF_COUNT 32
 #define I2S_DMA_BUF_LEN   64
-#define AUDIO_CALIBRATION_FACTOR 1.0073f
+#define AUDIO_CALIBRATION_FACTOR 1.0000f
 
-// ==================== INMP441 PINS ====================
-#define I2S_SCK_PIN       13   // Serial clock (bit clock)
-#define I2S_WS_PIN        12   // Word select (left/right clock)
-#define I2S_SD_PIN        11   // Serial data input
+// inmp441 microphone pins
+#define I2S_SCK_PIN       13   // bit clock
+#define I2S_WS_PIN        12   // word select
+#define I2S_SD_PIN        11   // serial data
 
-// ==================== YIN ALGORITHM PARAMETERS ====================
-#define YIN_THRESHOLD         0.15f    // Confidence threshold
-#define YIN_SEARCH_WINDOW     0.40f    // ±20% search window around hint
+// yin algorithm tuning
+#define YIN_THRESHOLD         0.15f    // detection confidence
+#define YIN_SEARCH_WINDOW     0.40f    // ±40% search range
 
-// ==================== DATA STRUCTURES ====================
-
-// Audio buffer structure with heap-allocated sample storage
+// audio buffer with heap allocation
 struct AudioBuffer {
-    float* samples;                // heap-allocated audio data pointer
-    uint64_t captureTime;          // audio capture timestamp (microseconds)
-    uint64_t captureEndTime;       // capture completion timestamp (microseconds)
-    uint64_t queueSendTime;        // queue transmission timestamp (microseconds)
-    uint64_t queueReceiveTime;     // queue reception timestamp (microseconds)
-    uint32_t bufferID;             // unique buffer identifier
-    uint16_t sampleCount;          // sample count (max 2048)
-    float amplitude;               // peak amplitude in buffer
-    float rmsLevel;                // rms level for monitoring
-    bool isValid;                  // data integrity flag
+    float* samples;                // audio data pointer
+    uint64_t captureTime;          // capture start timestamp
+    uint64_t captureEndTime;       // capture end timestamp
+    uint64_t queueSendTime;        // queue send timestamp
+    uint64_t queueReceiveTime;     // queue receive timestamp
+    uint32_t bufferID;             // unique identifier
+    uint16_t sampleCount;          // sample count
+    float amplitude;               // peak amplitude
+    float rmsLevel;                // rms level
+    bool isValid;                  // validity flag
     
-    // constructor initializes safe defaults
     AudioBuffer() : samples(nullptr), captureTime(0), captureEndTime(0), 
                    queueSendTime(0), queueReceiveTime(0), bufferID(0), 
                    sampleCount(0), amplitude(0.0f), rmsLevel(0.0f), isValid(false) {}
     
-    // allocate heap memory for audio samples
+    // heap allocation for samples
     bool init(uint16_t size = 2048) {
         if (samples) free(samples);
         samples = (float*)malloc(size * sizeof(float));
@@ -65,7 +62,7 @@ struct AudioBuffer {
         return false;
     }
     
-    // release allocated memory
+    // memory cleanup
     void cleanup() {
         if (samples) {
             free(samples);
@@ -74,27 +71,27 @@ struct AudioBuffer {
         isValid = false;
     }
     
-    // validate buffer integrity
+    // data integrity check
     bool validate() const {
         return isValid && samples != nullptr && sampleCount > 0 && sampleCount <= 2048;
     }
 };
 
-// Frequency analysis result structure
+// pitch detection result
 struct TuningResult {
-    float frequency;               // detected frequency (hz)
-    char noteName[8];             // musical note (e.g., "a4", "c#3")
-    int centsOffset;              // cents deviation (-50 to +50)
-    uint64_t captureTime;         // original capture timestamp
-    uint64_t processStartTime;    // processing start timestamp
-    uint64_t acStartTime;         // first pass start timestamp
-    uint64_t acEndTime;           // first pass end timestamp
-    uint64_t yinStartTime;        // yin analysis start timestamp
-    uint64_t yinEndTime;          // yin analysis end timestamp
-    uint64_t displayStartTime;    // display update start timestamp
-    uint64_t displayEndTime;      // display update end timestamp
-    uint32_t bufferID;            // source buffer identifier
-    bool isValid;                 // data integrity flag
+    float frequency;               // detected frequency
+    char noteName[8];             // musical note name
+    int centsOffset;              // cents deviation
+    uint64_t captureTime;         // capture timestamp
+    uint64_t processStartTime;    // processing start
+    uint64_t acStartTime;         // coarse analysis start
+    uint64_t acEndTime;           // coarse analysis end
+    uint64_t yinStartTime;        // yin analysis start
+    uint64_t yinEndTime;          // yin analysis end
+    uint64_t displayStartTime;    // display start
+    uint64_t displayEndTime;      // display end
+    uint32_t bufferID;            // source buffer id
+    bool isValid;                 // result validity
     
     TuningResult() : frequency(0), centsOffset(0), captureTime(0), 
                     processStartTime(0), acStartTime(0), acEndTime(0),
@@ -103,12 +100,13 @@ struct TuningResult {
         memset(noteName, 0, sizeof(noteName));
     }
     
+    // frequency range validation
     bool validate() const {
         return isValid && frequency >= 20.0f && frequency <= 20000.0f;
     }
 };
 
-// Display state tracking
+// display state management
 struct DisplayState {
     char lastNoteName[8];
     float lastCentsOffset;
@@ -119,7 +117,7 @@ struct DisplayState {
     bool staticCirclesDrawn;
 };
 
-// Performance statistics
+// performance monitoring
 struct PerformanceStats {
     uint32_t totalProcessed;
     uint32_t totalDropped;
@@ -132,11 +130,13 @@ struct PerformanceStats {
                         minLatency(UINT64_MAX), maxLatency(0), initialized(true) {}
 };
 
-// ==================== DISPLAY LAYOUT ====================
-#define DISPLAY_CENTER_X     120
-#define DISPLAY_CENTER_Y     120
-#define DISPLAY_INNER_RADIUS  67   // -10 cents circle
-#define DISPLAY_MIDDLE_RADIUS 80  // 0 cents circle  
-#define DISPLAY_OUTER_RADIUS  93  // +10 cents circle
+// tuner display layout
+#define CENTS_UNDER_THRESHOLD -15 // flat threshold
+#define CENTS_OVER_THRESHOLD   15 // sharp threshold
+#define DISPLAY_CENTER_X       120
+#define DISPLAY_CENTER_Y       120
+#define DISPLAY_INNER_RADIUS   67   // flat circle
+#define DISPLAY_MIDDLE_RADIUS  80   // perfect pitch
+#define DISPLAY_OUTER_RADIUS   93   // sharp circle
 
 #endif // CONFIG_H

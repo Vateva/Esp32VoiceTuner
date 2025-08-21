@@ -5,40 +5,43 @@
 #include "audioprocessing.h"
 #include "tasks.h"
 
-// Setup: runs once at startup
+// system initialization
 void setup() {
     Serial.begin(115200);
     delay(2000);
     
+    // startup banner and system info
     Serial.println("=== ESP32-S3 Multi-Core Voice Tuner with GC9A01 Display ===");
     Serial.printf("CPU Frequency: %d MHz\n", getCpuFrequencyMhz());
     Serial.printf("Timing Debug: %s\n", ENABLE_TIMING_DEBUG ? "ENABLED" : "DISABLED");
+    Serial.println("Algorithm: Multi-Candidate YIN (Enhanced Harmonic Detection)");
     
-    // Initialize display for visual feedback
+    // display hardware setup
     initDisplay();
     
-    // Display startup message
+    // startup screen
     tft.fillScreen(TFT_BLACK);
     tft.setTextColor(TFT_WHITE);
     tft.setTextSize(2);
     tft.drawCenterString("VOICE TUNER", 120, 80);
     tft.setTextSize(1);
-    tft.drawCenterString("Initializing...", 120, 120);
+    tft.drawCenterString("Multi-Candidate YIN", 120, 110);
+    tft.drawCenterString("Initializing...", 120, 130);
     
-    // Initialize I2S audio
+    // audio subsystem initialization
     if (!initI2S()) {
         Serial.println("FATAL: I2S initialization failed");
         tft.setTextColor(TFT_RED);
-        tft.drawCenterString("I2S FAILED!", 120, 140);
+        tft.drawCenterString("I2S FAILED!", 120, 150);
         return;
     }
     
-    // Display I2S success
+    // i2s success indicator
     tft.setTextColor(TFT_GREEN);
-    tft.drawCenterString("I2S OK", 120, 140);
+    tft.drawCenterString("I2S OK", 120, 150);
     delay(500);
     
-    // Create synchronization mutexes
+    // freertos synchronization primitives
     serialMutex = xSemaphoreCreateMutex();
     statsMutex = xSemaphoreCreateMutex();
     displayMutex = xSemaphoreCreateMutex();
@@ -46,25 +49,25 @@ void setup() {
     if (!serialMutex || !statsMutex || !displayMutex) {
         Serial.println("FATAL: Failed to create mutexes");
         tft.setTextColor(TFT_RED);
-        tft.drawCenterString("MUTEX FAILED!", 120, 160);
+        tft.drawCenterString("MUTEX FAILED!", 120, 170);
         return;
     }
     
     Serial.println("Mutexes created successfully");
     
-    // Create inter-task communication queue
+    // inter-task communication queue
     audioQueue = xQueueCreate(4, sizeof(AudioBuffer*));
     
     if (!audioQueue) {
         Serial.println("FATAL: Failed to create audio queue");
         tft.setTextColor(TFT_RED);
-        tft.drawCenterString("QUEUE FAILED!", 120, 160);
+        tft.drawCenterString("QUEUE FAILED!", 120, 170);
         return;
     }
     
     Serial.println("Audio queue created successfully");
     
-    // Create tasks with core affinity
+    // dual-core task creation with affinity
     BaseType_t result1 = xTaskCreatePinnedToCore(
         audioTask, "AudioTask", 16384, NULL, 3, &audioTaskHandle, 0);
     
@@ -74,21 +77,21 @@ void setup() {
     if (result1 != pdPASS || result2 != pdPASS) {
         Serial.println("FATAL: Failed to create tasks");
         tft.setTextColor(TFT_RED);
-        tft.drawCenterString("TASK FAILED!", 120, 160);
+        tft.drawCenterString("TASK FAILED!", 120, 170);
         return;
     }
     
     Serial.println("All tasks created successfully");
-    Serial.println("System starting with two-pass (YINCoarse + YINFine) analysis...\n");
+    Serial.println("System starting with Multi-Candidate YIN for enhanced harmonic detection...\n");
     
     delay(1000);
     
-    // Render main tuner interface
+    // switch to main tuner interface
     drawTunerInterface();
 }
 
-// Main loop: minimal activity
+// main loop with watchdog prevention
 void loop() {
-    // Prevent watchdog timeout
+    // yield to freertos scheduler
     vTaskDelay(pdMS_TO_TICKS(1000));
 }

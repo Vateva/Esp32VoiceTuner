@@ -2,13 +2,13 @@
 #include "utilities.h"
 #include <esp_timer.h>
 
-// Global display instance
+// global display instance
 LGFX tft;
 DisplayState displayState = {"", 0.0f, 0, true, 0, 0, false};
 
-// LovyanGFX configuration implementation
+// lovyangfx spi bus configuration
 LGFX::LGFX(void) {
-  // SPI bus configuration for display communication
+  // spi bus setup for display communication
   {
     auto cfg = _bus_instance.config();
     cfg.spi_host = SPI2_HOST;
@@ -26,7 +26,7 @@ LGFX::LGFX(void) {
     _panel_instance.setBus(&_bus_instance);
   }
 
-  // GC9A01 panel configuration
+  // gc9a01 panel configuration
   {
     auto cfg = _panel_instance.config();
     cfg.pin_cs = TFT_CS;
@@ -50,8 +50,9 @@ LGFX::LGFX(void) {
   setPanel(&_panel_instance);
 }
 
-// Initialize display hardware and interface
+// hardware initialization and test sequence
 void initDisplay() {
+  // enable backlight
   pinMode(TFT_BLK, OUTPUT);
   digitalWrite(TFT_BLK, HIGH);
   safePrint("display backlight enabled\n");
@@ -59,7 +60,7 @@ void initDisplay() {
   tft.init();
   tft.setRotation(0);
 
-  // Display test sequence
+  // rgb test sequence
   tft.fillScreen(TFT_RED);
   delay(200);
   tft.fillScreen(TFT_GREEN);
@@ -72,69 +73,86 @@ void initDisplay() {
   drawTunerInterface();
 }
 
-// Draw static tuner interface elements
+// draw static reference circles and labels
 void drawStaticTunerElements() {
   if (displayState.staticCirclesDrawn) {
     return;
   }
-
-  // Draw three static reference circles
+  char tempStr[20];
+  
+  // outer circle (+cents threshold)
   tft.drawCircle(DISPLAY_CENTER_X, DISPLAY_CENTER_Y, DISPLAY_OUTER_RADIUS,
                  TFT_WHITE);
   tft.setTextSize(1);
+
+  sprintf(tempStr, "%dc", CENTS_OVER_THRESHOLD);
   tft.setTextColor(TFT_WHITE);
-  tft.drawCenterString("+10c", DISPLAY_CENTER_X,
+  tft.drawCenterString(tempStr, DISPLAY_CENTER_X,
                        DISPLAY_CENTER_Y - DISPLAY_OUTER_RADIUS - 9);
 
+  // middle circle (perfect pitch)
   tft.drawCircle(DISPLAY_CENTER_X, DISPLAY_CENTER_Y, DISPLAY_MIDDLE_RADIUS,
                  TFT_DARKGREY);
   tft.setTextColor(TFT_GREEN);
   tft.drawCenterString("0c", DISPLAY_CENTER_X,
                        DISPLAY_CENTER_Y - DISPLAY_MIDDLE_RADIUS + 0);
 
+  // inner circle (-cents threshold)
   tft.drawCircle(DISPLAY_CENTER_X, DISPLAY_CENTER_Y, DISPLAY_INNER_RADIUS,
                  TFT_WHITE);
+
+  sprintf(tempStr, "%dc", CENTS_UNDER_THRESHOLD);
   tft.setTextColor(TFT_WHITE);
-  tft.drawCenterString("-10c", DISPLAY_CENTER_X,
+  tft.drawCenterString(tempStr, DISPLAY_CENTER_X,
                        DISPLAY_CENTER_Y - DISPLAY_INNER_RADIUS + 4);
 
   displayState.staticCirclesDrawn = true;
 }
 
-void eraseDynamicCircle() { // erase dynamic circle and redraw middle
-                            // circle+labels
-
+// clean up dynamic circle and restore static elements
+void eraseDynamicCircle() {
+  // erase previous dynamic circle
   tft.drawCircle(DISPLAY_CENTER_X, DISPLAY_CENTER_Y,
                  displayState.lastDynamicRadius, TFT_BLACK);
-  /*tft.drawCircle(DISPLAY_CENTER_X, DISPLAY_CENTER_Y,
-                 displayState.lastDynamicRadius + 1, TFT_BLACK);*/
+  
+  // redraw middle reference circle
   tft.drawCircle(DISPLAY_CENTER_X, DISPLAY_CENTER_Y, DISPLAY_MIDDLE_RADIUS,
                  TFT_DARKGREY);
 
   tft.setTextSize(1);
+  
+  char tempStr[20];
+
+  // restore labels that may have been overwritten
+  sprintf(tempStr, "%dc", CENTS_OVER_THRESHOLD);
   tft.setTextColor(TFT_WHITE);
-  tft.drawCenterString("+10c", DISPLAY_CENTER_X,
+  tft.drawCenterString(tempStr, DISPLAY_CENTER_X,
                        DISPLAY_CENTER_Y - DISPLAY_OUTER_RADIUS - 9);
   tft.setTextColor(TFT_GREEN);
+
   tft.drawCenterString("0c", DISPLAY_CENTER_X,
                        DISPLAY_CENTER_Y - DISPLAY_MIDDLE_RADIUS + 0);
+
+  sprintf(tempStr, "%dc", CENTS_UNDER_THRESHOLD);
   tft.setTextColor(TFT_WHITE);
-  tft.drawCenterString("-10c", DISPLAY_CENTER_X,
+  tft.drawCenterString(tempStr, DISPLAY_CENTER_X,
                        DISPLAY_CENTER_Y - DISPLAY_INNER_RADIUS + 4);
 }
-// fastest possible - write directly to spi buffer
+
+// optimized circle drawing using bresenham algorithm
 void drawPreciseCircle(int centerX, int centerY, int radius, uint16_t color) {
-  // collect all pixels first, then send in one batch
-  static uint16_t pixelBuffer[1000]; // static to avoid stack allocation
+  // static buffers to avoid repeated allocation
+  static uint16_t pixelBuffer[1000];
   static int16_t xCoords[1000];
   static int16_t yCoords[1000];
   int pixelCount = 0;
 
+  // bresenham circle algorithm
   int x = radius;
   int y = 0;
   int decision = 1 - radius;
 
-  // collect all pixel coordinates first
+  // initial cardinal points
   xCoords[pixelCount] = centerX + radius;
   yCoords[pixelCount++] = centerY;
   xCoords[pixelCount] = centerX - radius;
@@ -144,6 +162,7 @@ void drawPreciseCircle(int centerX, int centerY, int radius, uint16_t color) {
   xCoords[pixelCount] = centerX;
   yCoords[pixelCount++] = centerY - radius;
 
+  // calculate all 8-fold symmetric points
   while (y < x) {
     y++;
     if (decision <= 0) {
@@ -153,7 +172,7 @@ void drawPreciseCircle(int centerX, int centerY, int radius, uint16_t color) {
       decision += 2 * (y - x) + 1;
     }
 
-    // collect all 8 symmetric points
+    // store all 8 symmetric points
     xCoords[pixelCount] = centerX + x;
     yCoords[pixelCount++] = centerY + y;
     xCoords[pixelCount] = centerX - x;
@@ -172,7 +191,7 @@ void drawPreciseCircle(int centerX, int centerY, int radius, uint16_t color) {
     yCoords[pixelCount++] = centerY - x;
   }
 
-  // now write all pixels in one optimized batch
+  // batch pixel write for efficiency
   tft.startWrite();
   for (int i = 0; i < pixelCount; i++) {
     tft.writePixel(xCoords[i], yCoords[i], color);
@@ -180,48 +199,73 @@ void drawPreciseCircle(int centerX, int centerY, int radius, uint16_t color) {
   tft.endWrite();
 }
 
-// Efficiently draw dynamic 1-pixel thick circle based on cents
-void drawOptimizedCentsCircle(float cents, uint16_t circleColor) {
-
-  // Calculate radius using linear mapping
-  int newRadius = DISPLAY_MIDDLE_RADIUS + (int)(cents * 2.0f);
-
-  // Handle extreme values
-  if (cents < -10.0f) {
-    newRadius = DISPLAY_INNER_RADIUS - (int)((fabs(cents) - 10.0f) * 1.0f);
-    if (newRadius < (DISPLAY_INNER_RADIUS - 27))
-      newRadius = (DISPLAY_INNER_RADIUS - 27);
-  } else if (cents > 10.0f) {
-    newRadius = DISPLAY_OUTER_RADIUS + (int)((cents - 10.0f) * 1.0f);
-    if (newRadius > (DISPLAY_OUTER_RADIUS + 26))
-      newRadius = (DISPLAY_OUTER_RADIUS + 26);//biggest possible circle in display
+// draw dynamic cents visualization circle
+void drawOptimizedCentsCircle(int cents, uint16_t circleColor) {
+  int newRadius;
+  
+  // calculate scaling factors based on threshold configuration
+  float lowerScale = (float)(DISPLAY_MIDDLE_RADIUS - DISPLAY_INNER_RADIUS) / abs(CENTS_UNDER_THRESHOLD);
+  float upperScale = (float)(DISPLAY_OUTER_RADIUS - DISPLAY_MIDDLE_RADIUS) / CENTS_OVER_THRESHOLD;
+  
+  // map cents to radius across four zones
+  if (cents < CENTS_UNDER_THRESHOLD) {
+    // zone 1: extreme flat (shrink inward from inner circle)
+    float extraCents = abs(cents) - abs(CENTS_UNDER_THRESHOLD);
+    newRadius = DISPLAY_INNER_RADIUS - (int)(extraCents * 1.0f);
+    
+    // clamp minimum radius
+    if (newRadius < (DISPLAY_INNER_RADIUS - 27)) {
+      newRadius = DISPLAY_INNER_RADIUS - 27;
+    }
+  } 
+  else if (cents < 0) {
+    // zone 2: moderate flat (between inner and middle)
+    newRadius = DISPLAY_MIDDLE_RADIUS + (int)(cents * lowerScale);
+  } 
+  else if (cents <= CENTS_OVER_THRESHOLD) {
+    // zone 3: moderate sharp (between middle and outer)
+    newRadius = DISPLAY_MIDDLE_RADIUS + (int)(cents * upperScale);
+  } 
+  else {
+    // zone 4: extreme sharp (grow outward from outer circle)
+    float extraCents = cents - CENTS_OVER_THRESHOLD;
+    newRadius = DISPLAY_OUTER_RADIUS + (int)(extraCents * 1.0f);
+    
+    // clamp maximum radius
+    if (newRadius > (DISPLAY_OUTER_RADIUS + 26)) {
+      newRadius = DISPLAY_OUTER_RADIUS + 26;
+    }
   }
-
-  // skip over static inner and outer circles
+  
+  // avoid collision with static reference circles
   if (newRadius >= (DISPLAY_INNER_RADIUS - 1) && newRadius <= (DISPLAY_INNER_RADIUS + 1)) {
-    newRadius = (cents < -10) ? (DISPLAY_INNER_RADIUS - 1) : (DISPLAY_INNER_RADIUS + 1);
-  } else if (newRadius >= (DISPLAY_OUTER_RADIUS - 1) && newRadius <= (DISPLAY_OUTER_RADIUS + 1)) {
-    newRadius = (cents < 10) ? (DISPLAY_OUTER_RADIUS - 1) : (DISPLAY_OUTER_RADIUS + 1);
+    newRadius = (cents < CENTS_UNDER_THRESHOLD) ? (DISPLAY_INNER_RADIUS - 1) : (DISPLAY_INNER_RADIUS + 1);
+  } 
+  else if (newRadius >= (DISPLAY_OUTER_RADIUS - 1) && newRadius <= (DISPLAY_OUTER_RADIUS + 1)) {
+    newRadius = (cents < CENTS_OVER_THRESHOLD) ? (DISPLAY_OUTER_RADIUS - 1) : (DISPLAY_OUTER_RADIUS + 1);
   }
-  // Erase previous dynamic circle
+  else if (newRadius >= (DISPLAY_MIDDLE_RADIUS - 1) && newRadius <= (DISPLAY_MIDDLE_RADIUS + 1)) {
+    newRadius = (cents < 0) ? (DISPLAY_MIDDLE_RADIUS - 1) : (DISPLAY_MIDDLE_RADIUS + 1);
+  }
+  
+  // erase previous circle if radius changed
   if (displayState.lastDynamicRadius > 0 &&
       displayState.lastDynamicRadius != newRadius) {
     eraseDynamicCircle();
   }
-
-  // Draw new dynamic circle
+  
+  // draw new circle if different from previous
   if (newRadius != displayState.lastDynamicRadius ||
       circleColor != displayState.lastDynamicColor) {
     tft.drawCircle(DISPLAY_CENTER_X, DISPLAY_CENTER_Y, newRadius, circleColor);
-    /*tft.drawCircle(DISPLAY_CENTER_X, DISPLAY_CENTER_Y, newRadius + 1,
-                   circleColor);*/
-
+    
+    // update state tracking
     displayState.lastDynamicRadius = newRadius;
     displayState.lastDynamicColor = circleColor;
   }
 }
 
-// Draw complete interface
+// reset display to initial tuner state
 void drawTunerInterface() {
   tft.fillScreen(TFT_BLACK);
   displayState.staticCirclesDrawn = false;
@@ -230,65 +274,72 @@ void drawTunerInterface() {
   drawStaticTunerElements();
 }
 
-// Update dynamic tuner display elements efficiently
-void updateTunerDisplay(const char *note, float cents, TuningResult *result,
+// update tuner display with new pitch data
+void updateTunerDisplay(const char *note, int cents, TuningResult *result,
                         bool hasAudio) {
   if (!displayMutex)
     return;
 
+  // timestamp display update start
   if (result) {
     result->displayStartTime = esp_timer_get_time();
     printTiming("display start", result->bufferID, result->displayStartTime,
                 result->captureTime);
   }
 
+  // acquire display mutex with timeout
   if (xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
     drawStaticTunerElements();
 
+    // determine color based on pitch accuracy
     uint16_t noteColor;
 
-    if (fabs(cents) <= 10.0f) {
-      noteColor = TFT_GREEN; // 0-10 cents
-    } else if (fabs(cents) <= 13.0f) {
-      noteColor = TFT_GREENYELLOW; // 10-13 cents
-    } else if (fabs(cents) <= 18.0f) {
-      noteColor = TFT_YELLOW; // 13-18 cents
-    } else if (fabs(cents) <= 20.0f) {
-      noteColor = TFT_ORANGE; // 18-20 cents
+    if (abs(cents) <= CENTS_OVER_THRESHOLD) {
+      noteColor = TFT_GREEN; 
+    } else if (abs(cents) <= CENTS_OVER_THRESHOLD + 3) {
+      noteColor = TFT_GREENYELLOW;
+    } else if (abs(cents) <= CENTS_OVER_THRESHOLD + 5) {
+      noteColor = TFT_YELLOW;
+    } else if (abs(cents) <= CENTS_OVER_THRESHOLD + 7) {
+      noteColor = TFT_ORANGE;
     } else {
-      noteColor = TFT_RED; // >20 cents
+      noteColor = TFT_RED;
     }
 
-    // update text only if significantly changed
+    // update text only when significantly changed
     if (strcmp(note, displayState.lastNoteName) != 0 ||
         fabs(cents - displayState.lastCentsOffset) > 1.0f) {
 
-      // smallest rectangle that erases the note and cent count
+      // clear text area efficiently
       tft.fillRect(93, 97, 51, 44, TFT_BLACK);
 
-      tft.setTextColor(noteColor); // cents displaying
+      // draw cents value
+      tft.setTextColor(noteColor);
       tft.setTextSize(2);
       char centsStr[8];
-      snprintf(centsStr, sizeof(centsStr), "%.0f", cents);
+      snprintf(centsStr, sizeof(centsStr), "%d", cents);
       tft.drawCenterString(centsStr, 120, 97);
 
-      tft.setTextSize(3); //  note displaying
+      // draw note name
+      tft.setTextSize(3);
       tft.drawCenterString(note, 120, 120);
 
+      // update state tracking
       strcpy(displayState.lastNoteName, note);
       displayState.lastCentsOffset = cents;
     }
 
+    // update dynamic circle or clear if no audio
     if (hasAudio) {
       drawOptimizedCentsCircle(cents, noteColor);
     } else if (displayState.lastDynamicRadius > 0) {
-      // erase existing circle
       eraseDynamicCircle();
       displayState.lastDynamicRadius = 0;
     }
 
     xSemaphoreGive(displayMutex);
 
+    // timestamp display update end
     if (result) {
       result->displayEndTime = esp_timer_get_time();
       printTiming("display end", result->bufferID, result->displayEndTime,
@@ -297,8 +348,9 @@ void updateTunerDisplay(const char *note, float cents, TuningResult *result,
   }
 }
 
-// Display tuning results on GC9A01
+// main display update with queue management
 void displayResult(const TuningResult *result, const AudioBuffer *buffer) {
+  // handle invalid result
   if (!result || !result->validate()) {
     if (displayState.lastNoteName[0] != '\0') {
       updateTunerDisplay("--", 0.0f, nullptr, false);
@@ -307,21 +359,24 @@ void displayResult(const TuningResult *result, const AudioBuffer *buffer) {
     return;
   }
 
+  // skip display update if queue is backing up
   UBaseType_t queueDepth = uxQueueMessagesWaiting(audioQueue);
   bool skipDisplayUpdate = (queueDepth > 2);
 
   TuningResult mutableResult = *result;
 
+  // determine if display update needed
   bool needsUpdate = false;
 
   if (strcmp(result->noteName, displayState.lastNoteName) != 0) {
     needsUpdate = true;
   }
 
-  if (fabs(result->centsOffset - displayState.lastCentsOffset) > 2.0f) {
+  if (abs(result->centsOffset - displayState.lastCentsOffset) > 2) {
     needsUpdate = true;
   }
 
+  // perform display update if needed and not skipping
   if ((needsUpdate || displayState.needsFullRedraw) && !skipDisplayUpdate) {
     updateTunerDisplay(result->noteName, result->centsOffset, &mutableResult,
                        true);
@@ -330,16 +385,19 @@ void displayResult(const TuningResult *result, const AudioBuffer *buffer) {
     strcpy(displayState.lastNoteName, result->noteName);
     displayState.lastCentsOffset = result->centsOffset;
   } else if (skipDisplayUpdate) {
+    // fake timing for skipped update
     mutableResult.displayStartTime = esp_timer_get_time();
     mutableResult.displayEndTime = mutableResult.displayStartTime + 1000;
     printTiming("display skipped", mutableResult.bufferID,
                 mutableResult.displayEndTime, mutableResult.captureTime);
   }
 
+  // output timing summary
   if (buffer) {
     printTimingSummary(&mutableResult, buffer);
   }
 
+  // update performance statistics
   uint64_t totalLatency = mutableResult.displayEndTime - result->captureTime;
   updateStats(totalLatency);
 }

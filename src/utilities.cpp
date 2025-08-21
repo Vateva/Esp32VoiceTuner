@@ -1,7 +1,7 @@
 #include "utilities.h"
 #include <stdarg.h>
 
-// Global variable definitions
+// freertos synchronization primitives
 SemaphoreHandle_t serialMutex = nullptr;
 SemaphoreHandle_t displayMutex = nullptr;
 SemaphoreHandle_t statsMutex = nullptr;
@@ -9,19 +9,20 @@ QueueHandle_t audioQueue = nullptr;
 TaskHandle_t audioTaskHandle = nullptr;
 TaskHandle_t processingTaskHandle = nullptr;
 
+// atomic performance counters
 volatile uint32_t bufferCounter = 0;
 volatile uint32_t processedCount = 0;
 volatile uint32_t droppedCount = 0;
 
 PerformanceStats stats;
 
-// Calculate milliseconds elapsed from capture start
+// convert microsecond timing to milliseconds
 float calculateTimingMs(uint64_t currentTime, uint64_t captureTime) {
     if (currentTime == 0 || captureTime == 0) return 0.0f;
     return (float)(currentTime - captureTime) / 1000.0f;
 }
 
-// Thread-safe timing output
+// debug timing with mutex protection
 void printTiming(const char* stage, uint32_t bufferID, uint64_t currentTime, uint64_t captureTime) {
     #if ENABLE_TIMING_DEBUG
     if (!stage || currentTime == 0 || captureTime == 0) return;
@@ -30,11 +31,12 @@ void printTiming(const char* stage, uint32_t bufferID, uint64_t currentTime, uin
     #endif
 }
 
-// Comprehensive pipeline timing analysis
+// complete pipeline performance analysis
 void printTimingSummary(const TuningResult* result, const AudioBuffer* buffer) {
     #if ENABLE_TIMING_DEBUG
     if (!result || !buffer || !result->validate()) return;
     
+    // calculate phase timings
     float captureMs = calculateTimingMs(buffer->captureEndTime, buffer->captureTime);
     float queueMs = calculateTimingMs(buffer->queueReceiveTime, buffer->queueSendTime);
     float yin1Ms = calculateTimingMs(result->acEndTime, result->acStartTime); 
@@ -42,6 +44,7 @@ void printTimingSummary(const TuningResult* result, const AudioBuffer* buffer) {
     float displayMs = calculateTimingMs(result->displayEndTime, result->displayStartTime);
     float totalMs = calculateTimingMs(result->displayEndTime, buffer->captureTime);
     
+    // output timing breakdown
     safePrintf("=== TIMING SUMMARY buffer %lu ===\n", buffer->bufferID);
     safePrintf("capture: %.2f ms | queue: %.2f ms | yin coarse: %.2f ms | yin fine: %.2f ms | display: %.2f ms | total: %.2f ms\n",
               captureMs, queueMs, yin1Ms, yinMs, displayMs, totalMs);
@@ -51,7 +54,7 @@ void printTimingSummary(const TuningResult* result, const AudioBuffer* buffer) {
     #endif
 }
 
-// Safely print string with mutex protection
+// thread-safe serial output
 bool safePrint(const char* message) {
     if (!serialMutex || !message) return false;
     
@@ -64,7 +67,7 @@ bool safePrint(const char* message) {
     return false;
 }
 
-// Thread-safe printf with buffer overflow protection
+// thread-safe formatted output with overflow protection
 bool safePrintf(const char* format, ...) {
     if (!serialMutex || !format) return false;
     
@@ -74,18 +77,19 @@ bool safePrintf(const char* format, ...) {
     int len = vsnprintf(buffer, sizeof(buffer), format, args);
     va_end(args);
     
+    // validate buffer bounds
     if (len > 0 && len < sizeof(buffer)) {
         return safePrint(buffer);
     }
     return false;
 }
 
-// Atomic buffer id increment
+// atomic buffer identifier generation
 uint32_t getNextBufferID() {
     return __atomic_fetch_add(&bufferCounter, 1, __ATOMIC_SEQ_CST);
 }
 
-// Thread-safe statistics update
+// thread-safe performance metrics update
 void updateStats(uint64_t latency) {
     if (!statsMutex) return;
     

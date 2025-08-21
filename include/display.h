@@ -5,7 +5,7 @@
 #define LGFX_USE_V1
 #include <LovyanGFX.hpp>
 
-// LovyanGFX configuration for GC9A01 display
+// lovyangfx driver configuration for gc9a01
 class LGFX : public lgfx::LGFX_Device
 {
   lgfx::Panel_GC9A01 _panel_instance;
@@ -15,18 +15,18 @@ public:
   LGFX(void);
 };
 
-// Global display instance
+// global display objects
 extern LGFX tft;
 extern DisplayState displayState;
 
-// Display function declarations
+// display control functions
 void initDisplay();
 void drawTunerInterface();
 void drawStaticTunerElements();
 void eraseDynamicCircle();
 void drawPreciseCircle(int centerX, int centerY, int radius, uint16_t color);
-void updateTunerDisplay(const char* note, float cents, TuningResult* result, bool hasAudio);
-void drawOptimizedCentsCircle(float cents, uint16_t circleColor);
+void updateTunerDisplay(const char* note, int cents, TuningResult* result, bool hasAudio);
+void drawOptimizedCentsCircle(int cents, uint16_t circleColor);
 void displayResult(const TuningResult* result, const AudioBuffer* buffer);
 
 #endif // DISPLAY_H

@@ -3,7 +3,7 @@
 
 #include "config.h"
 
-// Task function declarations
+// freertos task functions
 void audioTask(void* parameter);
 void processingAndDisplayTask(void* parameter);
 
