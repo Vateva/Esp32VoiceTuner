@@ -3,6 +3,12 @@
 
 #include "config.h"
 
+// audio filtering functions
+void initAudioFilters();
+void calculateButterworthCoefficients(float cutoffHz, float sampleRate, bool isHighpass, IIRFilter* filter);
+float applyIIRFilter(float input, IIRFilter* filter);
+void applyPrefiltering(float* samples, uint16_t sampleCount);
+
 // audio subsystem and analysis functions
 bool initI2S();
 bool captureRealAudio(AudioBuffer* buffer);

@@ -21,6 +21,11 @@ extern volatile uint32_t droppedCount;
 // performance statistics
 extern PerformanceStats stats;
 
+// power management state
+extern PowerState currentPowerState;
+extern uint32_t silenceTimer;
+extern uint32_t lastSoundTime;
+
 // utility functions
 float calculateTimingMs(uint64_t currentTime, uint64_t captureTime);
 void printTiming(const char* stage, uint32_t bufferID, uint64_t currentTime, uint64_t captureTime);
@@ -29,6 +34,13 @@ bool safePrint(const char* message);
 bool safePrintf(const char* format, ...);
 uint32_t getNextBufferID();
 void updateStats(uint64_t latency);
+
+// db detection and power management functions
+float calculateDbLevel(float rmsLevel);
+bool shouldActivateAnalysis(float dbLevel);
+void updatePowerState(float dbLevel);
+void switchToPowerState(PowerState newState);
+void setCpuFrequency(uint32_t freqMhz);
 
 // confidence calculation and smoothing functions
 float calculateYinConfidence(float yinValue);

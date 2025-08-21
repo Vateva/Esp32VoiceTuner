@@ -17,6 +17,11 @@ volatile uint32_t droppedCount = 0;
 
 PerformanceStats stats;
 
+// power management state variables
+PowerState currentPowerState = DETECTING;
+uint32_t silenceTimer = 0;
+uint32_t lastSoundTime = 0;
+
 // convert microsecond timing to milliseconds
 float calculateTimingMs(uint64_t currentTime, uint64_t captureTime) {
     if (currentTime == 0 || captureTime == 0) return 0.0f;
@@ -102,6 +107,116 @@ void updateStats(uint64_t latency) {
         if (latency < stats.minLatency) stats.minLatency = latency;
         if (latency > stats.maxLatency) stats.maxLatency = latency;
         xSemaphoreGive(statsMutex);
+    }
+}
+
+// calculate db level from rms amplitude
+float calculateDbLevel(float rmsLevel) {
+    // handle silence floor to prevent log(0)
+    if (rmsLevel < 0.0001f) {
+        return -80.0f; // silence floor
+    }
+    
+    // convert rms to db: db = 20 * log10(rms / reference)
+    float dbLevel = 20.0f * log10f(rmsLevel / DB_REFERENCE_LEVEL);
+    
+    // clamp to reasonable range
+    if (dbLevel < -80.0f) dbLevel = -80.0f;
+    if (dbLevel > 0.0f) dbLevel = 0.0f;
+    
+    return dbLevel;
+}
+
+// determine if sound level warrants full analysis
+bool shouldActivateAnalysis(float dbLevel) {
+    // use hysteresis to prevent rapid switching
+    if (currentPowerState == DETECTING) {
+        return dbLevel > DB_ACTIVATION_THRESHOLD;
+    } else {
+        // already in analyzing mode, check for continued sound
+        return dbLevel > DB_DEACTIVATION_THRESHOLD;
+    }
+}
+
+// update power management state with retriggerable timer
+void updatePowerState(float dbLevel) {
+    uint32_t currentTime = millis();
+    
+    if (dbLevel > DB_DEACTIVATION_THRESHOLD) {
+        // sound detected - reset silence timer
+        lastSoundTime = currentTime;
+        silenceTimer = SILENCE_TIMEOUT_MS;
+        
+        // switch to analyzing mode if not already there
+        if (currentPowerState == DETECTING) {
+            switchToPowerState(ANALYZING);
+            safePrintf("POWER: switching to analyzing mode (db=%.1f)\n", dbLevel);
+        }
+    } else if (currentPowerState == ANALYZING) {
+        // in analyzing mode but no sound - count down silence timer
+        uint32_t elapsed = currentTime - lastSoundTime;
+        if (elapsed >= SILENCE_TIMEOUT_MS) {
+            // 10 seconds of silence - switch to detecting mode
+            switchToPowerState(DETECTING);
+            safePrintf("POWER: switching to detecting mode after %.1fs silence\n", 
+                      (float)elapsed / 1000.0f);
+        }
+    }
+}
+
+// change cpu frequency and update power state
+void switchToPowerState(PowerState newState) {
+    if (newState == currentPowerState) return;
+    
+    PowerState oldState = currentPowerState;
+    currentPowerState = newState;
+    
+    // adjust cpu frequency based on state
+    if (newState == DETECTING) {
+        setCpuFrequency(DETECTING_CPU_FREQ);
+        safePrintf("POWER: detecting mode - cpu %d mhz\n", DETECTING_CPU_FREQ);
+    } else {
+        setCpuFrequency(ANALYZING_CPU_FREQ);
+        safePrintf("POWER: analyzing mode - cpu %d mhz\n", ANALYZING_CPU_FREQ);
+    }
+    
+    // reset silence timer when switching to analyzing
+    if (newState == ANALYZING) {
+        silenceTimer = SILENCE_TIMEOUT_MS;
+        lastSoundTime = millis();
+    }
+    
+    // log power state change
+    static uint32_t stateChangeCounter = 0;
+    safePrintf("POWER STATE CHANGE #%lu: %s -> %s\n", 
+              ++stateChangeCounter, 
+              (oldState == DETECTING) ? "DETECTING" : "ANALYZING",
+              (newState == DETECTING) ? "DETECTING" : "ANALYZING");
+}
+
+// set esp32 cpu frequency with validation
+void setCpuFrequency(uint32_t freqMhz) {
+    // validate frequency is supported
+    if (freqMhz != 80 && freqMhz != 160 && freqMhz != 240) {
+        safePrintf("ERROR: unsupported cpu frequency %lu mhz\n", freqMhz);
+        return;
+    }
+    
+    uint32_t oldFreq = getCpuFrequencyMhz();
+    if (oldFreq == freqMhz) {
+        return; // already at target frequency
+    }
+    
+    // change frequency using arduino framework function
+    bool success = setCpuFrequencyMhz(freqMhz);
+    
+    // verify frequency change
+    uint32_t newFreq = getCpuFrequencyMhz();
+    if (newFreq == freqMhz && success) {
+        safePrintf("CPU frequency changed: %lu -> %lu mhz\n", oldFreq, newFreq);
+    } else {
+        safePrintf("ERROR: cpu frequency change failed %lu -> %lu (got %lu)\n", 
+                  oldFreq, freqMhz, newFreq);
     }
 }
 

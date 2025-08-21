@@ -28,5 +28,6 @@ void drawPreciseCircle(int centerX, int centerY, int radius, uint16_t color);
 void updateTunerDisplay(const char* note, int cents, TuningResult* result, bool hasAudio);
 void drawOptimizedCentsCircle(int cents, uint16_t circleColor);
 void displayResult(const TuningResult* result, const AudioBuffer* buffer);
+void displayDetectingMode();
 
 #endif // DISPLAY_H
