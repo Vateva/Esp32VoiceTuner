@@ -37,7 +37,6 @@ void updateStats(uint64_t latency);
 
 // db detection and power management functions
 float calculateDbLevel(float rmsLevel);
-bool shouldActivateAnalysis(float dbLevel);
 void updatePowerState(float dbLevel);
 void switchToPowerState(PowerState newState);
 void setCpuFrequency(uint32_t freqMhz);

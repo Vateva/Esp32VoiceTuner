@@ -1,3 +1,4 @@
+// updated display.cpp - add brightness control and conditional cents display
 #include "display.h"
 #include "menu.h"      // add menu.h include for menu state checking
 #include "utilities.h"
@@ -51,11 +52,35 @@ LGFX::LGFX(void) {
   setPanel(&_panel_instance);
 }
 
+// set display brightness using pwm control on backlight pin
+void setDisplayBrightness(int brightnessPercent) {
+    // clamp brightness to valid range
+    if (brightnessPercent < 10) brightnessPercent = 10;
+    if (brightnessPercent > 100) brightnessPercent = 100;
+    
+    // setup pwm for backlight control
+    static bool pwmInitialized = false;
+    if (!pwmInitialized) {
+        // configure pwm channel for backlight
+        ledcSetup(0, 5000, 8); // channel 0, 5khz frequency, 8-bit resolution
+        ledcAttachPin(TFT_BLK, 0); // attach backlight pin to pwm channel 0
+        pwmInitialized = true;
+        safePrint("pwm backlight control initialized\n");
+    }
+    
+    // convert percentage to 8-bit pwm value (0-255)
+    int pwmValue = (brightnessPercent * 255) / 100;
+    
+    // apply pwm to backlight pin
+    ledcWrite(0, pwmValue);
+    
+    safePrintf("display brightness set to %d%% (pwm=%d)\n", brightnessPercent, pwmValue);
+}
+
 // hardware initialization and test sequence
 void initDisplay() {
-  // enable backlight
-  pinMode(TFT_BLK, OUTPUT);
-  digitalWrite(TFT_BLK, HIGH);
+  // initialize backlight with full brightness initially
+  setDisplayBrightness(100);
   safePrint("display backlight enabled\n");
 
   tft.init();
@@ -91,12 +116,16 @@ void drawStaticTunerElements() {
   }
   char tempStr[20];
   
+  // use runtime parameter for threshold values instead of constants
+  int centsOverThreshold = tunerParams.flatSharpThreshold;
+  int centsUnderThreshold = -tunerParams.flatSharpThreshold;
+  
   // outer circle (+cents threshold)
   tft.drawCircle(DISPLAY_CENTER_X, DISPLAY_CENTER_Y, DISPLAY_OUTER_RADIUS,
                  TFT_WHITE);
   tft.setTextSize(1);
 
-  sprintf(tempStr, "%dc", CENTS_OVER_THRESHOLD);
+  sprintf(tempStr, "%dc", centsOverThreshold);
   tft.setTextColor(TFT_WHITE);
   tft.drawCenterString(tempStr, DISPLAY_CENTER_X,
                        DISPLAY_CENTER_Y - DISPLAY_OUTER_RADIUS - 9);
@@ -112,7 +141,7 @@ void drawStaticTunerElements() {
   tft.drawCircle(DISPLAY_CENTER_X, DISPLAY_CENTER_Y, DISPLAY_INNER_RADIUS,
                  TFT_WHITE);
 
-  sprintf(tempStr, "%dc", CENTS_UNDER_THRESHOLD);
+  sprintf(tempStr, "%dc", centsUnderThreshold);
   tft.setTextColor(TFT_WHITE);
   tft.drawCenterString(tempStr, DISPLAY_CENTER_X,
                        DISPLAY_CENTER_Y - DISPLAY_INNER_RADIUS + 4);
@@ -139,8 +168,12 @@ void eraseDynamicCircle() {
   
   char tempStr[20];
 
+  // use runtime parameters for threshold values
+  int centsOverThreshold = tunerParams.flatSharpThreshold;
+  int centsUnderThreshold = -tunerParams.flatSharpThreshold;
+
   // restore labels that may have been overwritten
-  sprintf(tempStr, "%dc", CENTS_OVER_THRESHOLD);
+  sprintf(tempStr, "%dc", centsOverThreshold);
   tft.setTextColor(TFT_WHITE);
   tft.drawCenterString(tempStr, DISPLAY_CENTER_X,
                        DISPLAY_CENTER_Y - DISPLAY_OUTER_RADIUS - 9);
@@ -149,7 +182,7 @@ void eraseDynamicCircle() {
   tft.drawCenterString("0c", DISPLAY_CENTER_X,
                        DISPLAY_CENTER_Y - DISPLAY_MIDDLE_RADIUS + 0);
 
-  sprintf(tempStr, "%dc", CENTS_UNDER_THRESHOLD);
+  sprintf(tempStr, "%dc", centsUnderThreshold);
   tft.setTextColor(TFT_WHITE);
   tft.drawCenterString(tempStr, DISPLAY_CENTER_X,
                        DISPLAY_CENTER_Y - DISPLAY_INNER_RADIUS + 4);
@@ -164,14 +197,18 @@ void drawOptimizedCentsCircle(int cents, uint16_t circleColor) {
   
   int newRadius;
   
-  // calculate scaling factors based on threshold configuration
-  float lowerScale = (float)(DISPLAY_MIDDLE_RADIUS - DISPLAY_INNER_RADIUS) / abs(CENTS_UNDER_THRESHOLD);
-  float upperScale = (float)(DISPLAY_OUTER_RADIUS - DISPLAY_MIDDLE_RADIUS) / CENTS_OVER_THRESHOLD;
+  // use runtime parameters for threshold calculations
+  int centsOverThreshold = tunerParams.flatSharpThreshold;
+  int centsUnderThreshold = -tunerParams.flatSharpThreshold;
+  
+  // calculate scaling factors based on runtime threshold configuration
+  float lowerScale = (float)(DISPLAY_MIDDLE_RADIUS - DISPLAY_INNER_RADIUS) / abs(centsUnderThreshold);
+  float upperScale = (float)(DISPLAY_OUTER_RADIUS - DISPLAY_MIDDLE_RADIUS) / centsOverThreshold;
   
   // map cents to radius across four zones
-  if (cents < CENTS_UNDER_THRESHOLD) {
+  if (cents < centsUnderThreshold) {
     // zone 1: extreme flat (shrink inward from inner circle)
-    float extraCents = abs(cents) - abs(CENTS_UNDER_THRESHOLD);
+    float extraCents = abs(cents) - abs(centsUnderThreshold);
     newRadius = DISPLAY_INNER_RADIUS - (int)(extraCents * DYNAMIC_CIRCLE_EXTREME_SCALE);
     
     // clamp minimum radius
@@ -183,13 +220,13 @@ void drawOptimizedCentsCircle(int cents, uint16_t circleColor) {
     // zone 2: moderate flat (between inner and middle)
     newRadius = DISPLAY_MIDDLE_RADIUS + (int)(cents * lowerScale);
   } 
-  else if (cents <= CENTS_OVER_THRESHOLD) {
+  else if (cents <= centsOverThreshold) {
     // zone 3: moderate sharp (between middle and outer)
     newRadius = DISPLAY_MIDDLE_RADIUS + (int)(cents * upperScale);
   } 
   else {
     // zone 4: extreme sharp (grow outward from outer circle)
-    float extraCents = cents - CENTS_OVER_THRESHOLD;
+    float extraCents = cents - centsOverThreshold;
     newRadius = DISPLAY_OUTER_RADIUS + (int)(extraCents * DYNAMIC_CIRCLE_EXTREME_SCALE);
     
     // clamp maximum radius
@@ -200,10 +237,10 @@ void drawOptimizedCentsCircle(int cents, uint16_t circleColor) {
   
   // avoid collision with static reference circles
   if (newRadius >= (DISPLAY_INNER_RADIUS - DYNAMIC_CIRCLE_COLLISION_BUFFER) && newRadius <= (DISPLAY_INNER_RADIUS + DYNAMIC_CIRCLE_COLLISION_BUFFER)) {
-    newRadius = (cents < CENTS_UNDER_THRESHOLD) ? (DISPLAY_INNER_RADIUS - DYNAMIC_CIRCLE_COLLISION_BUFFER) : (DISPLAY_INNER_RADIUS + DYNAMIC_CIRCLE_COLLISION_BUFFER);
+    newRadius = (cents < centsUnderThreshold) ? (DISPLAY_INNER_RADIUS - DYNAMIC_CIRCLE_COLLISION_BUFFER) : (DISPLAY_INNER_RADIUS + DYNAMIC_CIRCLE_COLLISION_BUFFER);
   } 
   else if (newRadius >= (DISPLAY_OUTER_RADIUS - DYNAMIC_CIRCLE_COLLISION_BUFFER) && newRadius <= (DISPLAY_OUTER_RADIUS + DYNAMIC_CIRCLE_COLLISION_BUFFER)) {
-    newRadius = (cents < CENTS_OVER_THRESHOLD) ? (DISPLAY_OUTER_RADIUS - DYNAMIC_CIRCLE_COLLISION_BUFFER) : (DISPLAY_OUTER_RADIUS + DYNAMIC_CIRCLE_COLLISION_BUFFER);
+    newRadius = (cents < centsOverThreshold) ? (DISPLAY_OUTER_RADIUS - DYNAMIC_CIRCLE_COLLISION_BUFFER) : (DISPLAY_OUTER_RADIUS + DYNAMIC_CIRCLE_COLLISION_BUFFER);
   }
   else if (newRadius >= (DISPLAY_MIDDLE_RADIUS - DYNAMIC_CIRCLE_COLLISION_BUFFER) && newRadius <= (DISPLAY_MIDDLE_RADIUS + DYNAMIC_CIRCLE_COLLISION_BUFFER)) {
     newRadius = (cents < 0) ? (DISPLAY_MIDDLE_RADIUS - DYNAMIC_CIRCLE_COLLISION_BUFFER) : (DISPLAY_MIDDLE_RADIUS + DYNAMIC_CIRCLE_COLLISION_BUFFER);
@@ -332,16 +369,19 @@ void updateTunerDisplay(const char *note, int cents, TuningResult *result,
     
     drawStaticTunerElements();
 
-    // determine color based on pitch accuracy
+    // use runtime parameters for color thresholds
+    int flatSharpThreshold = tunerParams.flatSharpThreshold;
+    
+    // determine color based on pitch accuracy using runtime parameters
     uint16_t noteColor;
 
-    if (abs(cents) <= CENTS_OVER_THRESHOLD) {
+    if (abs(cents) <= flatSharpThreshold) {
       noteColor = TFT_GREEN; 
-    } else if (abs(cents) <= CENTS_OVER_THRESHOLD + CENTS_COLOR_THRESHOLD_GREENYELLOW) {
+    } else if (abs(cents) <= flatSharpThreshold + CENTS_COLOR_THRESHOLD_GREENYELLOW) {
       noteColor = TFT_GREENYELLOW;
-    } else if (abs(cents) <= CENTS_OVER_THRESHOLD + CENTS_COLOR_THRESHOLD_YELLOW) {
+    } else if (abs(cents) <= flatSharpThreshold + CENTS_COLOR_THRESHOLD_YELLOW) {
       noteColor = TFT_YELLOW;
-    } else if (abs(cents) <= CENTS_OVER_THRESHOLD + CENTS_COLOR_THRESHOLD_ORANGE) {
+    } else if (abs(cents) <= flatSharpThreshold + CENTS_COLOR_THRESHOLD_ORANGE) {
       noteColor = TFT_ORANGE;
     } else {
       noteColor = TFT_RED;
@@ -354,7 +394,7 @@ void updateTunerDisplay(const char *note, int cents, TuningResult *result,
       // clear text area efficiently
       tft.fillRect(TEXT_CLEAR_AREA_X, TEXT_CLEAR_AREA_Y, TEXT_CLEAR_AREA_WIDTH, TEXT_CLEAR_AREA_HEIGHT, TFT_BLACK);
 
-      // draw cents value (check if showCents parameter is enabled)
+      // draw cents value ONLY if showCents parameter is enabled
       if (tunerParams.showCents) {
         tft.setTextColor(noteColor);
         tft.setTextSize(2);
@@ -366,7 +406,7 @@ void updateTunerDisplay(const char *note, int cents, TuningResult *result,
       // draw note name
       tft.setTextSize(3);
       tft.setTextColor(noteColor);
-      tft.drawCenterString(note, NOTE_TEXT_POS_X, NOTE_TEXT_POS_Y);
+      tft.drawCenterString(note, NOTE_TEXT_POS_X, (tunerParams.showCents)? NOTE_TEXT_POS_Y : (NOTE_TEXT_POS_Y - 10) );
 
       // update state tracking
       strcpy(displayState.lastNoteName, note);
@@ -466,5 +506,4 @@ void displayResult(const TuningResult *result, const AudioBuffer *buffer) {
 
   // update performance statistics
   uint64_t totalLatency = smoothedResult.displayEndTime - result->captureTime;
-  updateStats(totalLatency);
 }

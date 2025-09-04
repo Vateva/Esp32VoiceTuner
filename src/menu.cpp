@@ -1,6 +1,8 @@
+// updated menu.cpp - implement real parameter application
 #include "menu.h"
 #include "display.h"
 #include "utilities.h"
+#include "audioprocessing.h"
 #include <esp_timer.h>
 
 /*
@@ -146,8 +148,6 @@ void checkButtonsAndUpdateMenu() {
     bool downPressed = readButtonState(BUTTON_DOWN_PIN);
     bool selectPressed = readButtonState(BUTTON_SELECT_PIN);
     
-    // update button state machine
-    updateButtonStateMachine();
     
     // global button state tracking to prevent cross-mode button bouncing
     static bool globalLastDownState = false;
@@ -184,10 +184,6 @@ void checkButtonsAndUpdateMenu() {
     globalLastSelectState = selectPressed;
 }
 
-// button state machine update logic
-void updateButtonStateMachine() {
-    // basic implementation - can be expanded for complex button sequences
-}
 
 // activate menu system and switch display
 void triggerMenuEntry() {
@@ -404,7 +400,7 @@ void exitMenuSystem() {
 // handle menu timeout (auto-exit if inactive)
 void handleMenuTimeout() {
     uint32_t currentTime = millis();
-    uint32_t timeoutMs = tunerParams.menuTimeout * 1000; // convert to milliseconds
+    uint32_t timeoutMs = tunerParams.menuTimeout * 1000; // use runtime parameter
     
     if ((currentTime - menuSystem.lastMenuActivity) > timeoutMs) {
         safePrint("menu timeout - auto exit\n");
@@ -525,12 +521,14 @@ void formatParameterValue(const Parameter& param, char* buffer, size_t bufferSiz
 
 // apply display parameter changes immediately
 void applyDisplayChanges() {
-    // brightness change would be applied here
     safePrintf("applying display changes: brightness=%d%%, showCents=%s\n",
               tunerParams.brightness, tunerParams.showCents ? "ON" : "OFF");
     
-    // TODO: implement brightness control when available
-    // TODO: update display to show/hide cents based on showCents parameter
+    // apply brightness control using pwm on backlight pin
+    setDisplayBrightness(tunerParams.brightness);
+    
+    // showCents flag is checked in display.cpp updateTunerDisplay() function
+    // no immediate action needed - display will update on next frame
 }
 
 // apply all parameter changes when exiting menu
@@ -542,18 +540,22 @@ void applyParameterChanges() {
     safePrintf("  yin search window: %d%%\n", tunerParams.yinSearchWindow);
     safePrintf("  smoothing level: %d\n", tunerParams.smoothingLevel);
     
-    // audio prefiltering  
+    // audio prefiltering - recalculate filter coefficients
     safePrintf("  highpass cutoff: %dHz\n", tunerParams.highpassCutoff);
     safePrintf("  lowpass cutoff: %dHz\n", tunerParams.lowpassCutoff);
+    recalculateAudioFilters();
     
-    // system parameters
+    // system parameters - these are used directly by checking tunerParams
     safePrintf("  silence timeout: %ds\n", tunerParams.silenceTimeout);
     safePrintf("  db activation: %ddB\n", tunerParams.dbActivation);
     safePrintf("  db deactivation: %ddB\n", tunerParams.dbDeactivation);
     safePrintf("  menu timeout: %ds\n", tunerParams.menuTimeout);
     
-    // TODO: implement actual parameter application to config system
-    // this will involve updating filter coefficients, thresholds, etc.
+    // display parameters were already applied immediately
+    safePrintf("  brightness: %d%% (applied immediately)\n", tunerParams.brightness);
+    safePrintf("  show cents: %s (applied immediately)\n", tunerParams.showCents ? "ON" : "OFF");
+    
+    safePrint("all parameters applied successfully\n");
 }
 
 // setup menu structure with main menu and submenus

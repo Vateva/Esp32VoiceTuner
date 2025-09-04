@@ -5,17 +5,15 @@
 
 // button state tracking for clean detection
 enum ButtonState {
-    BUTTONS_RELEASED,         // no buttons pressed
-    SINGLE_BUTTON_DOWN,       // only down button pressed  
-    SINGLE_BUTTON_SELECT      // only select button pressed
+    BUTTONS_RELEASED         // no buttons pressed
+
 };
 
 // menu system operational states
 enum MenuMode {
     MENU_HIDDEN,          // menu not active, normal tuner operation
     MENU_MAIN,           // showing main menu level
-    MENU_SUB,            // showing submenu level
-    MENU_EXITING         // transitioning back to tuner
+    MENU_SUB            // showing submenu level
 };
 
 // parameter types for menu items
@@ -151,13 +149,11 @@ struct MenuSystem {
     
     // display state  
     bool needsRedraw;              // full menu redraw required
-    bool exitSelected;             // user selected exit option
     
     MenuSystem() : currentMode(MENU_HIDDEN), buttonState(BUTTONS_RELEASED),
                   buttonPressTime(0), lastButtonCheck(0), lastMenuActivity(0),
                   mainMenuIndex(0), subMenuIndex(0), currentMainItem(0),
-                  mainMenu(nullptr), mainMenuCount(0), needsRedraw(false),
-                  exitSelected(false) {}
+                  mainMenu(nullptr), mainMenuCount(0), needsRedraw(false) {}
 };
 
 // global menu system instance and parameters

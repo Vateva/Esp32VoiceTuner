@@ -37,12 +37,10 @@
 #define I2S_DMA_BUF_COUNT 32
 #define I2S_DMA_BUF_LEN   64
 #define AUDIO_BUFFER_SAMPLES 2048
-#define AUDIO_CALIBRATION_FACTOR 1.0000f
 
 // Audio Prefiltering
 #define HIGHPASS_CUTOFF_HZ    60.0f    // Remove dc offset and low frequency noise
 #define LOWPASS_CUTOFF_HZ   6000.0f    // Remove high frequency noise above harmonics
-#define FILTER_ORDER             2     // 2nd order butterworth filters
 
 // =================================================================
 // YIN PITCH DETECTION ALGORITHM
@@ -64,8 +62,8 @@
 // Harmonic Scoring
 #define YIN_HARMONICS_TO_CHECK {2, 3, 4}
 #define YIN_HARMONIC_WEIGHTS {0.8f, 0.6f, 0.4f}
-#define YIN_MIN_HARMONIC_PERIOD 16
 #define YIN_MIN_HARMONIC_VALID_SAMPLES 32
+#define YIN_MIN_HARMONIC_PERIOD 16
 #define YIN_HARMONIC_CORRELATION_THRESHOLD 0.1f
 #define YIN_HARMONIC_BONUS 1.5f
 
@@ -171,22 +169,18 @@
 
 // menu structure configuration  
 #define MENU_MAX_ITEMS             5     // maximum items per menu level
-#define MENU_MAX_LEVELS            2     // two level deep menu (main + sub)
 #define MENU_TIMEOUT_MS            10000 // auto-exit menu after 10 seconds inactive
 
 // menu display layout
 #define MENU_TITLE_Y               40    // y position for menu title
 #define MENU_ITEM_START_Y          70    // y position for first menu item
 #define MENU_ITEM_HEIGHT           25    // spacing between menu items
-#define MENU_SELECTION_INDENT      10    // indent for selected item indicator
-#define MENU_TEXT_SIZE             1     // text size for menu items
 
 // menu colors
 #define MENU_BACKGROUND_COLOR      TFT_BLACK      // menu background
 #define MENU_TITLE_COLOR           TFT_CYAN       // menu title text
 #define MENU_ITEM_COLOR            TFT_WHITE      // normal menu item text
 #define MENU_SELECTED_COLOR        TFT_GREEN      // selected menu item text
-#define MENU_INDICATOR_COLOR       TFT_YELLOW     // selection indicator color
 
 // Power management states
 enum PowerState {

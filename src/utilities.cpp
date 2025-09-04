@@ -1,4 +1,6 @@
+// updated utilities.cpp - use runtime parameters for power management
 #include "utilities.h"
+#include "menu.h"  // add menu.h to access tunerParams
 #include <stdarg.h>
 #include <cmath>
 
@@ -15,7 +17,6 @@ volatile uint32_t bufferCounter = 0;
 volatile uint32_t processedCount = 0;
 volatile uint32_t droppedCount = 0;
 
-PerformanceStats stats;
 
 // power management state variables
 PowerState currentPowerState = DETECTING;
@@ -97,18 +98,6 @@ uint32_t getNextBufferID() {
     return __atomic_fetch_add(&bufferCounter, 1, __ATOMIC_SEQ_CST);
 }
 
-// thread-safe performance metrics update
-void updateStats(uint64_t latency) {
-    if (!statsMutex) return;
-    
-    if (xSemaphoreTake(statsMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-        stats.totalProcessed++;
-        stats.totalLatency += latency;
-        if (latency < stats.minLatency) stats.minLatency = latency;
-        if (latency > stats.maxLatency) stats.maxLatency = latency;
-        xSemaphoreGive(statsMutex);
-    }
-}
 
 // calculate db level from rms amplitude
 float calculateDbLevel(float rmsLevel) {
@@ -127,39 +116,35 @@ float calculateDbLevel(float rmsLevel) {
     return dbLevel;
 }
 
-// determine if sound level warrants full analysis
-bool shouldActivateAnalysis(float dbLevel) {
-    // use hysteresis to prevent rapid switching
-    if (currentPowerState == DETECTING) {
-        return dbLevel > DB_ACTIVATION_THRESHOLD;
-    } else {
-        // already in analyzing mode, check for continued sound
-        return dbLevel > DB_DEACTIVATION_THRESHOLD;
-    }
-}
 
-// update power management state with retriggerable timer
+
+// update power management state with retriggerable timer using runtime parameters
 void updatePowerState(float dbLevel) {
     uint32_t currentTime = millis();
     
-    if (dbLevel > DB_DEACTIVATION_THRESHOLD) {
+    // use runtime parameters instead of constants
+    float deactivationThreshold = (float)tunerParams.dbDeactivation;
+    uint32_t silenceTimeoutMs = tunerParams.silenceTimeout * 1000; // convert seconds to ms
+    
+    if (dbLevel > deactivationThreshold) {
         // sound detected - reset silence timer
         lastSoundTime = currentTime;
-        silenceTimer = SILENCE_TIMEOUT_MS;
+        silenceTimer = silenceTimeoutMs;
         
         // switch to analyzing mode if not already there
         if (currentPowerState == DETECTING) {
             switchToPowerState(ANALYZING);
-            safePrintf("POWER: switching to analyzing mode (db=%.1f)\n", dbLevel);
+            safePrintf("POWER: switching to analyzing mode (db=%.1f, threshold=%.1f)\n", 
+                      dbLevel, (float)tunerParams.dbActivation);
         }
     } else if (currentPowerState == ANALYZING) {
         // in analyzing mode but no sound - count down silence timer
         uint32_t elapsed = currentTime - lastSoundTime;
-        if (elapsed >= SILENCE_TIMEOUT_MS) {
-            // 10 seconds of silence - switch to detecting mode
+        if (elapsed >= silenceTimeoutMs) {
+            // silence timeout reached - switch to detecting mode
             switchToPowerState(DETECTING);
-            safePrintf("POWER: switching to detecting mode after %.1fs silence\n", 
-                      (float)elapsed / 1000.0f);
+            safePrintf("POWER: switching to detecting mode after %.1fs silence (timeout=%ds)\n", 
+                      (float)elapsed / 1000.0f, tunerParams.silenceTimeout);
         }
     }
 }
@@ -180,9 +165,9 @@ void switchToPowerState(PowerState newState) {
         safePrintf("POWER: analyzing mode - cpu %d mhz\n", ANALYZING_CPU_FREQ);
     }
     
-    // reset silence timer when switching to analyzing
+    // reset silence timer when switching to analyzing (use runtime parameter)
     if (newState == ANALYZING) {
-        silenceTimer = SILENCE_TIMEOUT_MS;
+        silenceTimer = tunerParams.silenceTimeout * 1000;
         lastSoundTime = millis();
     }
     
@@ -330,16 +315,32 @@ float calculateOverallConfidence(const TuningResult* result, const AudioBuffer* 
     return overallConf;
 }
 
-// map confidence score to ema alpha value
+// map confidence score to ema alpha value based on runtime smoothing level
 float calculateDynamicAlpha(float confidence) {
+    // use runtime smoothing level parameter to adjust responsiveness
+    float smoothingFactor = (float)tunerParams.smoothingLevel / 5.0f; // normalize 1-5 to 0.2-1.0
+    
+    // calculate base alpha range based on smoothing level
+    float minAlpha = EMA_ALPHA_MIN * smoothingFactor;
+    float maxAlpha = EMA_ALPHA_MAX * smoothingFactor;
+    
     // high confidence = high alpha (responsive)
     // low confidence = low alpha (smooth)
     
-    if (confidence <= 0.0f) return EMA_ALPHA_MIN;
-    if (confidence >= 1.0f) return EMA_ALPHA_MAX;
+    if (confidence <= 0.0f) return minAlpha;
+    if (confidence >= 1.0f) return maxAlpha;
     
     // smooth interpolation between min and max alpha
-    return EMA_ALPHA_MIN + (confidence * (EMA_ALPHA_MAX - EMA_ALPHA_MIN));
+    float alpha = minAlpha + (confidence * (maxAlpha - minAlpha));
+    
+    // debug alpha calculation every 16 samples
+    static uint32_t alphaDebugCounter = 0;
+    if (ENABLE_CONFIDENCE_DEBUG && (alphaDebugCounter++ % 16) == 0) {
+        safePrintf("SMOOTHING ALPHA: level=%d, factor=%.2f, conf=%.3f -> alpha=%.3f (range %.3f-%.3f)\n",
+                  tunerParams.smoothingLevel, smoothingFactor, confidence, alpha, minAlpha, maxAlpha);
+    }
+    
+    return alpha;
 }
 
 // apply confidence-based ema smoothing to tuning result
@@ -371,7 +372,7 @@ bool applySmoothingFilter(TuningResult* result, const AudioBuffer* buffer,
         return false;
     }
     
-    // calculate dynamic alpha based on confidence
+    // calculate dynamic alpha based on confidence and runtime smoothing level
     float alpha = calculateDynamicAlpha(result->overallConfidence);
     
     // first measurement initialization
@@ -383,9 +384,9 @@ bool applySmoothingFilter(TuningResult* result, const AudioBuffer* buffer,
         state->lastUpdateTime = millis();
         
         if (ENABLE_CONFIDENCE_DEBUG) {
-            safePrintf("SMOOTHING INIT: freq=%.1f, cents=%d, conf=%.3f, alpha=%.3f\n",
+            safePrintf("SMOOTHING INIT: freq=%.1f, cents=%d, conf=%.3f, alpha=%.3f, level=%d\n",
                       state->smoothedFrequency, (int)state->smoothedCents, 
-                      result->overallConfidence, alpha);
+                      result->overallConfidence, alpha, tunerParams.smoothingLevel);
         }
         return true;
     }
@@ -421,7 +422,8 @@ bool applySmoothingFilter(TuningResult* result, const AudioBuffer* buffer,
     static uint32_t smoothDebugCounter = 0;
     if (ENABLE_CONFIDENCE_DEBUG && (smoothDebugCounter++ % 8) == 0) {
         safePrintf("SMOOTHING APPLIED:\n");
-        safePrintf("  conf=%.3f -> alpha=%.3f\n", result->overallConfidence, alpha);
+        safePrintf("  conf=%.3f -> alpha=%.3f (level=%d)\n", 
+                  result->overallConfidence, alpha, tunerParams.smoothingLevel);
         safePrintf("  freq: %.1f -> %.1f (delta: %.1f)\n", 
                   originalFreq, result->frequency, result->frequency - originalFreq);
         safePrintf("  cents: %.1f -> %d (delta: %.1f)\n", 

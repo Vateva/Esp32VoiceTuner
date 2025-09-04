@@ -1,3 +1,4 @@
+// updated audioprocessing.h - add filter recalculation function declaration
 #ifndef AUDIOPROCESSING_H
 #define AUDIOPROCESSING_H
 
@@ -5,6 +6,7 @@
 
 // audio filtering functions
 void initAudioFilters();
+void recalculateAudioFilters();  // add filter recalculation function for runtime parameter changes
 void calculateButterworthCoefficients(float cutoffHz, float sampleRate, bool isHighpass, IIRFilter* filter);
 float applyIIRFilter(float input, IIRFilter* filter);
 void applyPrefiltering(float* samples, uint16_t sampleCount);

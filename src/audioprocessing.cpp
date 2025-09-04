@@ -1,5 +1,7 @@
+// updated audioprocessing.cpp - add runtime parameters and filter recalculation
 #include "audioprocessing.h"
 #include "utilities.h"
+#include "menu.h"  // add menu.h to access tunerParams
 #include <esp_timer.h>
 #include <cmath>
 
@@ -45,6 +47,26 @@ void calculateButterworthCoefficients(float cutoffHz, float sampleRate, bool isH
     
     // reset filter state
     filter->reset();
+}
+
+// recalculate audio filter coefficients using runtime parameters
+void recalculateAudioFilters() {
+    safePrint("recalculating audio filter coefficients...\n");
+    
+    // use runtime parameters instead of constants
+    float highpassCutoff = (float)tunerParams.highpassCutoff;
+    float lowpassCutoff = (float)tunerParams.lowpassCutoff;
+    
+    // calculate new highpass filter coefficients
+    calculateButterworthCoefficients(highpassCutoff, I2S_SAMPLE_RATE, true, &audioFilters.highpass);
+    
+    // calculate new lowpass filter coefficients
+    calculateButterworthCoefficients(lowpassCutoff, I2S_SAMPLE_RATE, false, &audioFilters.lowpass);
+    
+    audioFilters.filtersReady = true;
+    
+    safePrintf("audio filters recalculated: HP=%.0f Hz, LP=%.0f Hz\n", 
+              highpassCutoff, lowpassCutoff);
 }
 
 // initialize audio filtering subsystem
@@ -459,9 +481,12 @@ bool yinAnalysis(const AudioBuffer* input, TuningResult* output, int hintedPerio
     
     float yinBuffer[YIN_MAX_PERIOD + 1];
 
+    // use runtime parameter for search window instead of constant
+    float searchWindow = (float)tunerParams.yinSearchWindow / 100.0f; // convert percentage to decimal
+
     // focused search window around coarse estimate
-    int searchMin = hintedPeriod * (1.0f - YIN_SEARCH_WINDOW);
-    int searchMax = hintedPeriod * (1.0f + YIN_SEARCH_WINDOW);
+    int searchMin = hintedPeriod * (1.0f - searchWindow);
+    int searchMax = hintedPeriod * (1.0f + searchWindow);
 
     if (searchMin < YIN_MIN_PERIOD) searchMin = YIN_MIN_PERIOD;
     if (searchMax > YIN_MAX_PERIOD) searchMax = YIN_MAX_PERIOD;
@@ -527,7 +552,7 @@ bool yinAnalysis(const AudioBuffer* input, TuningResult* output, int hintedPerio
     }
     
     // convert to musical notation
-    output->frequency = ((float)I2S_SAMPLE_RATE / betterPeriod) * AUDIO_CALIBRATION_FACTOR;
+    output->frequency = ((float)I2S_SAMPLE_RATE / betterPeriod);
     convertFrequencyToNote(output->frequency, output->noteName, sizeof(output->noteName));
     output->centsOffset = calculateCentsOffset(output->frequency);
     output->isValid = true;
@@ -543,8 +568,8 @@ bool yinAnalysis(const AudioBuffer* input, TuningResult* output, int hintedPerio
     // periodic debug output
     static uint32_t debugCounter = 0;
     if (ENABLE_TIMING_DEBUG && (debugCounter++ % 32) == 0) {
-        safePrintf("candidates found: %d, best period: %d, yin: %.3f, harmonic: %.3f\n", 
-                  candidateCount, bestPeriod, bestYinValue, bestHarmonicScore);
+        safePrintf("candidates found: %d, best period: %d, yin: %.3f, harmonic: %.3f, search window: %.0f%%\n", 
+                  candidateCount, bestPeriod, bestYinValue, bestHarmonicScore, searchWindow * 100.0f);
     }
 
     return output->validate();

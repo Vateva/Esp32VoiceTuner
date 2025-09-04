@@ -1,3 +1,4 @@
+// updated display.h - add brightness control function declaration
 #ifndef DISPLAY_H
 #define DISPLAY_H
 
@@ -21,10 +22,10 @@ extern DisplayState displayState;
 
 // display control functions
 void initDisplay();
+void setDisplayBrightness(int brightnessPercent);  // add brightness control function
 void drawTunerInterface();
 void drawStaticTunerElements();
 void eraseDynamicCircle();
-void drawPreciseCircle(int centerX, int centerY, int radius, uint16_t color);
 void updateTunerDisplay(const char* note, int cents, TuningResult* result, bool hasAudio);
 void drawOptimizedCentsCircle(int cents, uint16_t circleColor);
 void displayResult(const TuningResult* result, const AudioBuffer* buffer);
