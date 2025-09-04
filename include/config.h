@@ -9,23 +9,24 @@
 // =================================================================
 #define ENABLE_TIMING_DEBUG 0
 #define ENABLE_CONFIDENCE_DEBUG 1
+#define ENABLE_SERIAL_MONITOR_PRINT 1 
 #define SERIAL_BAUD_RATE 115200
 
 // =================================================================
 // HARDWARE PINS
 // =================================================================
-// GC9A01 Round Display
-#define TFT_SCK     1   // SPI clock
-#define TFT_MOSI    2   // SPI data out
-#define TFT_CS      5   // Chip select
-#define TFT_DC      4   // Data/command
-#define TFT_RST     3   // Reset
-#define TFT_BLK     6   // Backlight
+// gc9a01 round display
+#define TFT_SCK     1   // spi clock
+#define TFT_MOSI    2   // spi data out
+#define TFT_CS      5   // chip select
+#define TFT_DC      4   // data/command
+#define TFT_RST     3   // reset
+#define TFT_BLK     6   // backlight
 
-// INMP441 Microphone
-#define I2S_SCK_PIN       13   // Bit clock
-#define I2S_WS_PIN        12   // Word select
-#define I2S_SD_PIN        11   // Serial data
+// inmp441 microphone
+#define I2S_SCK_PIN       13   // bit clock
+#define I2S_WS_PIN        12   // word select
+#define I2S_SD_PIN        11   // serial data
 
 // =================================================================
 // I2S & AUDIO PROCESSING
@@ -38,9 +39,15 @@
 #define I2S_DMA_BUF_LEN   64
 #define AUDIO_BUFFER_SAMPLES 2048
 
-// Audio Prefiltering
-#define HIGHPASS_CUTOFF_HZ    60.0f    // Remove dc offset and low frequency noise
-#define LOWPASS_CUTOFF_HZ   6000.0f    // Remove high frequency noise above harmonics
+// audio prefiltering
+#define HIGHPASS_CUTOFF_HZ    60.0f    // remove dc offset and low frequency noise
+#define LOWPASS_CUTOFF_HZ   6000.0f    // remove high frequency noise above harmonics
+
+// audio processing constants
+#define AUDIO_GAIN_FACTOR             3.0f        // audio input gain multiplier
+#define INT24_TO_FLOAT_DIVISOR        8388608.0f  // 2^23 for 24-bit signed to float conversion
+#define I2S_READ_TIMEOUT_MS           100         // i2s read operation timeout
+#define AUDIO_SILENCE_FLOOR_DB        -80.0f      // minimum db level (silence floor)
 
 // =================================================================
 // YIN PITCH DETECTION ALGORITHM
@@ -55,9 +62,9 @@
 #define YIN_COARSE_QUALITY_GATE 0.5f
 
 // Refined Pass
-#define YIN_THRESHOLD         0.15f    // Detection confidence
+#define YIN_THRESHOLD         0.15f    // detection confidence
 #define YIN_SEARCH_WINDOW     0.40f    // ±40% search range
-#define YIN_MAX_CANDIDATES    8        // Max candidates for refined analysis
+#define YIN_MAX_CANDIDATES    8        // max candidates for refined analysis
 
 // Harmonic Scoring
 #define YIN_HARMONICS_TO_CHECK {2, 3, 4}
@@ -84,12 +91,24 @@
 // =================================================================
 // SMOOTHING & CONFIDENCE
 // =================================================================
-#define MIN_CONFIDENCE_THRESHOLD  0.15f  // Minimum confidence for display update
-#define MIN_RMS_THRESHOLD        0.008f  // Minimum signal level
-#define EMA_ALPHA_MIN            0.08f   // Heavy smoothing for low confidence
-#define EMA_ALPHA_MAX            0.65f   // Light smoothing for high confidence
-#define FREQUENCY_STABILITY_WINDOW 5     // Samples for stability calculation
-#define A4_REFERENCE_PITCH       440.0f  // A4 = 440 Hz
+#define MIN_CONFIDENCE_THRESHOLD  0.15f  // minimum confidence for display update
+#define MIN_RMS_THRESHOLD        0.008f  // minimum signal level
+#define EMA_ALPHA_MIN            0.08f   // heavy smoothing for low confidence
+#define EMA_ALPHA_MAX            0.65f   // light smoothing for high confidence
+#define FREQUENCY_STABILITY_WINDOW 5     // samples for stability calculation
+#define A4_REFERENCE_PITCH       440.0f  // a4 = 440 hz
+
+// confidence calculation constants
+#define CONFIDENCE_YIN_WEIGHT           0.35f    // weight for yin quality in overall confidence
+#define CONFIDENCE_HARMONIC_WEIGHT      0.25f    // weight for harmonic content in overall confidence
+#define CONFIDENCE_SIGNAL_WEIGHT        0.25f    // weight for signal strength in overall confidence
+#define CONFIDENCE_STABILITY_WEIGHT     0.15f    // weight for frequency stability in overall confidence
+#define YIN_CONFIDENCE_MAX_VALUE        0.5f     // Maximum yin value for confidence calculation
+#define YIN_CONFIDENCE_DECAY_FACTOR     3.0f     // Exponential decay factor for yin confidence
+#define SIGNAL_CONFIDENCE_GOOD_LEVEL    0.1f     // Signal level considered "good" for confidence
+#define SIGNAL_CONFIDENCE_SIGMOID_FACTOR 8.0f    // Sigmoid steepness for signal confidence transition
+#define STABILITY_MIN_RELATIVE_DEV      0.001f   // Minimum relative deviation for perfect stability
+#define STABILITY_MAX_RELATIVE_DEV      0.02f    // Maximum relative deviation for zero stability
 
 // =================================================================
 // POWER MANAGEMENT
@@ -121,6 +140,12 @@
 // SPI Bus
 #define TFT_SPI_WRITE_FREQ 40000000
 #define TFT_SPI_READ_FREQ  16000000
+
+// PWM Backlight Control
+#define PWM_CHANNEL                   0          // PWM channel for backlight
+#define PWM_FREQUENCY                 5000       // PWM frequency in Hz
+#define PWM_RESOLUTION                8          // PWM resolution in bits (0-255)
+#define PWM_TIMEOUT_MS                100        // PWM setup timeout
 
 // Panel Dimensions
 #define TFT_PANEL_WIDTH 240
@@ -182,35 +207,35 @@
 #define MENU_ITEM_COLOR            TFT_WHITE      // normal menu item text
 #define MENU_SELECTED_COLOR        TFT_GREEN      // selected menu item text
 
-// Power management states
+// power management states
 enum PowerState {
-    DETECTING,    // Low power mode, simple dB monitoring only
-    ANALYZING     // Full power mode, complete yin analysis
+    DETECTING,    // low power mode, simple db monitoring only
+    ANALYZING     // full power mode, complete yin analysis
 };
 
-// 2nd order IIR filter state for real-time processing
+// 2nd order iir filter state for real-time processing
 struct IIRFilter {
-    float b0, b1, b2;        // Feedforward coefficients
-    float a1, a2;            // Feedback coefficients (a0 normalized to 1)
-    float x1, x2;            // Previous input samples
-    float y1, y2;            // Previous output samples
-    bool initialized;        // Initialization flag
+    float b0, b1, b2;        // feedforward coefficients
+    float a1, a2;            // feedback coefficients (a0 normalized to 1)
+    float x1, x2;            // previous input samples
+    float y1, y2;            // previous output samples
+    bool initialized;        // initialization flag
     
     IIRFilter() : b0(1.0f), b1(0.0f), b2(0.0f), a1(0.0f), a2(0.0f),
                   x1(0.0f), x2(0.0f), y1(0.0f), y2(0.0f), initialized(false) {}
     
-    // Reset filter state for new audio session
+    // reset filter state for new audio session
     void reset() {
         x1 = x2 = y1 = y2 = 0.0f;
         initialized = true;
     }
 };
 
-// Audio filter state management
+// audio filter state management
 struct AudioFilters {
-    IIRFilter highpass;      // DC removal and low frequency noise
-    IIRFilter lowpass;       // High frequency noise removal
-    bool filtersReady;       // Initialization status
+    IIRFilter highpass;      // dc removal and low frequency noise
+    IIRFilter lowpass;       // high frequency noise removal
+    bool filtersReady;       // initialization status
     
     AudioFilters() : filtersReady(false) {}
     
@@ -221,19 +246,19 @@ struct AudioFilters {
     }
 };
 
-// Audio buffer with heap allocation
+// audio buffer with heap allocation
 struct AudioBuffer {
-    float* samples;                // Audio data pointer
-    uint64_t captureTime;          // Capture start timestamp
-    uint64_t captureEndTime;       // Capture end timestamp
-    uint64_t queueSendTime;        // Queue send timestamp
-    uint64_t queueReceiveTime;     // Queue receive timestamp
-    uint32_t bufferID;             // Unique identifier
-    uint16_t sampleCount;          // Sample count
-    float amplitude;               // Peak amplitude
-    float rmsLevel;                // RMS level
-    float dbLevel;                 // dB level (calculated from RMS)
-    bool isValid;                  // Validity flag
+    float* samples;                // audio data pointer
+    uint64_t captureTime;          // capture start timestamp
+    uint64_t captureEndTime;       // capture end timestamp
+    uint64_t queueSendTime;        // queue send timestamp
+    uint64_t queueReceiveTime;     // queue receive timestamp
+    uint32_t bufferID;             // unique identifier
+    uint16_t sampleCount;          // sample count
+    float amplitude;               // peak amplitude
+    float rmsLevel;                // rms level
+    float dbLevel;                 // db level (calculated from rms)
+    bool isValid;                  // validity flag
     
     AudioBuffer() : samples(nullptr), captureTime(0), captureEndTime(0), 
                    queueSendTime(0), queueReceiveTime(0), bufferID(0), 

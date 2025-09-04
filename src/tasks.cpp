@@ -23,14 +23,14 @@ void audioTask(void* parameter) {
             // allocate new audio buffer
             AudioBuffer* buffer = new AudioBuffer();
             if (!buffer) {
-                safePrint("ERROR: Failed to allocate audio buffer\n");
+                safePrintf("ERROR: Failed to allocate audio buffer\n");
                 vTaskDelay(pdMS_TO_TICKS(10));
                 continue;
             }
             
             // initialize buffer with default sample count
             if (!buffer->init(AUDIO_BUFFER_SAMPLES)) {
-                safePrint("ERROR: Failed to initialize audio buffer\n");
+                safePrintf("ERROR: Failed to initialize audio buffer\n");
                 delete buffer;
                 vTaskDelay(pdMS_TO_TICKS(10));
                 continue;
@@ -40,7 +40,7 @@ void audioTask(void* parameter) {
             
             // capture audio from inmp441 (includes db calculation)
             if (!captureRealAudio(buffer)) {
-                safePrint("ERROR: Failed to capture real audio\n");
+                safePrintf("ERROR: Failed to capture real audio\n");
                 buffer->cleanup();
                 delete buffer;
                 vTaskDelay(pdMS_TO_TICKS(10));
@@ -149,7 +149,7 @@ void processingAndDisplayTask(void* parameter) {
             
             // validate received buffer
             if (!inputBuffer || !inputBuffer->validate()) {
-                safePrint("ERROR: Received invalid buffer in processing task\n");
+                safePrintf("ERROR: Received invalid buffer in processing task\n");
                 if (inputBuffer) {
                     inputBuffer->cleanup();
                     delete inputBuffer;

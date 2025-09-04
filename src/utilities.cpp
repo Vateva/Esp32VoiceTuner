@@ -1,4 +1,3 @@
-// updated utilities.cpp - use runtime parameters for power management
 #include "utilities.h"
 #include "menu.h"  // add menu.h to access tunerParams
 #include <stdarg.h>
@@ -17,11 +16,15 @@ volatile uint32_t bufferCounter = 0;
 volatile uint32_t processedCount = 0;
 volatile uint32_t droppedCount = 0;
 
-
 // power management state variables
 PowerState currentPowerState = DETECTING;
 uint32_t silenceTimer = 0;
 uint32_t lastSoundTime = 0;
+
+// ================================================================
+// debug/monitoring functions - only compiled when enable_serial_monitor_print is enabled
+// ================================================================
+#if ENABLE_SERIAL_MONITOR_PRINT
 
 // convert microsecond timing to milliseconds
 float calculateTimingMs(uint64_t currentTime, uint64_t captureTime) {
@@ -67,7 +70,7 @@ void printTimingSummary(const TuningResult* result, const AudioBuffer* buffer) {
 bool safePrint(const char* message) {
     if (!serialMutex || !message) return false;
     
-    if (xSemaphoreTake(serialMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+    if (xSemaphoreTake(serialMutex, pdMS_TO_TICKS(PWM_TIMEOUT_MS)) == pdTRUE) {
         Serial.print(message);
         Serial.flush();
         xSemaphoreGive(serialMutex);
@@ -93,17 +96,22 @@ bool safePrintf(const char* format, ...) {
     return false;
 }
 
+#endif // ENABLE_SERIAL_MONITOR_PRINT
+
+// ================================================================
+// core utility functions - always available regardless of debug settings
+// ================================================================
+
 // atomic buffer identifier generation
 uint32_t getNextBufferID() {
     return __atomic_fetch_add(&bufferCounter, 1, __ATOMIC_SEQ_CST);
 }
 
-
 // calculate db level from rms amplitude
 float calculateDbLevel(float rmsLevel) {
     // handle silence floor to prevent log(0)
     if (rmsLevel < 0.0001f) {
-        return -80.0f; // silence floor
+        return AUDIO_SILENCE_FLOOR_DB; // silence floor
     }
     
     // convert rms to db: db = 20 * log10(rms / reference)
@@ -115,8 +123,6 @@ float calculateDbLevel(float rmsLevel) {
     
     return dbLevel;
 }
-
-
 
 // update power management state with retriggerable timer using runtime parameters
 void updatePowerState(float dbLevel) {
@@ -210,22 +216,22 @@ float calculateYinConfidence(float yinValue) {
     // yin values: 0.0 = perfect, 0.15 = threshold, 1.0 = worst
     // confidence: 1.0 = perfect, 0.0 = worst
     if (yinValue <= 0.0f) return 1.0f;
-    if (yinValue >= 0.5f) return 0.0f;
+    if (yinValue >= YIN_CONFIDENCE_MAX_VALUE) return 0.0f;
     
     // exponential decay for confidence
-    float normalizedYin = yinValue / 0.5f;
-    return expf(-3.0f * normalizedYin);
+    float normalizedYin = yinValue / YIN_CONFIDENCE_MAX_VALUE;
+    return expf(-YIN_CONFIDENCE_DECAY_FACTOR * normalizedYin);
 }
 
 // calculate signal strength confidence based on rms level
 float calculateSignalConfidence(float rmsLevel) {
     // too quiet = low confidence, good level = high confidence
     if (rmsLevel < MIN_RMS_THRESHOLD) return 0.0f;
-    if (rmsLevel > 0.1f) return 1.0f;
+    if (rmsLevel > SIGNAL_CONFIDENCE_GOOD_LEVEL) return 1.0f;
     
     // sigmoid curve for smooth transition
-    float normalizedRms = (rmsLevel - MIN_RMS_THRESHOLD) / (0.1f - MIN_RMS_THRESHOLD);
-    return 1.0f / (1.0f + expf(-8.0f * (normalizedRms - 0.5f)));
+    float normalizedRms = (rmsLevel - MIN_RMS_THRESHOLD) / (SIGNAL_CONFIDENCE_GOOD_LEVEL - MIN_RMS_THRESHOLD);
+    return 1.0f / (1.0f + expf(-SIGNAL_CONFIDENCE_SIGMOID_FACTOR * (normalizedRms - 0.5f)));
 }
 
 // measure frequency stability over recent samples
@@ -260,12 +266,12 @@ float calculateFrequencyStability(SmoothingState* state) {
     
     // stability score: 1.0 = very stable, 0.0 = very unstable
     float stabilityScore;
-    if (relativeDev < 0.001f) {
+    if (relativeDev < STABILITY_MIN_RELATIVE_DEV) {
         stabilityScore = 1.0f;
-    } else if (relativeDev > 0.02f) {
+    } else if (relativeDev > STABILITY_MAX_RELATIVE_DEV) {
         stabilityScore = 0.0f;
     } else {
-        stabilityScore = 1.0f - (relativeDev / 0.02f);
+        stabilityScore = 1.0f - (relativeDev / STABILITY_MAX_RELATIVE_DEV);
     }
     
     // debug stability calculation every 32 samples
@@ -290,10 +296,10 @@ float calculateOverallConfidence(const TuningResult* result, const AudioBuffer* 
     float stabilityConf = calculateFrequencyStability(state);
     
     // weighted combination (can be tuned based on testing)
-    float overallConf = (yinConf * 0.35f) +           // 35% yin quality
-                       (harmonicConf * 0.25f) +       // 25% harmonic content
-                       (signalConf * 0.25f) +         // 25% signal strength
-                       (stabilityConf * 0.15f);       // 15% frequency stability
+    float overallConf = (yinConf * CONFIDENCE_YIN_WEIGHT) +           // 35% yin quality
+                       (harmonicConf * CONFIDENCE_HARMONIC_WEIGHT) +  // 25% harmonic content
+                       (signalConf * CONFIDENCE_SIGNAL_WEIGHT) +      // 25% signal strength
+                       (stabilityConf * CONFIDENCE_STABILITY_WEIGHT); // 15% frequency stability
     
     // detailed confidence debugging output every 16 samples
     static uint32_t debugCounter = 0;

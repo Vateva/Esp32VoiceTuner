@@ -4,9 +4,11 @@
 #include "display.h"
 #include "audioprocessing.h"
 #include "tasks.h"
+#include "menu.h"
 
 // system initialization
 void setup() {
+#if ENABLE_SERIAL_MONITOR_PRINT
     Serial.begin(SERIAL_BAUD_RATE);
     delay(2000);
     
@@ -26,16 +28,13 @@ void setup() {
                   DETECTING_CPU_FREQ, ANALYZING_CPU_FREQ);
     Serial.printf("Initial Power State: %s\n", 
                   (currentPowerState == DETECTING) ? "DETECTING" : "ANALYZING");
+#endif
     
     // display hardware setup
     initDisplay();
     
-    // display hardware setup
-    initDisplay();
-    
-    // ADD THIS SECTION:
     // menu system early initialization (gpio setup)
-    safePrint("initializing menu system...\n");
+    safePrintf("initializing menu system...\n");
     
     // note: full menu initialization happens in processing task
     // this just sets up gpio pins early
@@ -46,6 +45,14 @@ void setup() {
     tft.drawCenterString("2-BUTTON MENU OK", 120, 210);
     delay(500);
         
+    // load saved parameters from flash
+    safePrintf("loading saved parameters...\n");
+    loadParametersFromFlash();
+    
+    tft.setTextColor(TFT_YELLOW);
+    tft.drawCenterString("CONFIG LOADED", 120, 225);
+    delay(500);
+
     // startup screen with power management info
     tft.fillScreen(TFT_BLACK);
     tft.setTextColor(TFT_WHITE);

@@ -1,4 +1,4 @@
-// updated audioprocessing.h - add filter recalculation function declaration
+// audio processing and filtering functions
 #ifndef AUDIOPROCESSING_H
 #define AUDIOPROCESSING_H
 
@@ -6,12 +6,12 @@
 
 // audio filtering functions
 void initAudioFilters();
-void recalculateAudioFilters();  // add filter recalculation function for runtime parameter changes
+void recalculateAudioFilters();  // recalculate filters when parameters change
 void calculateButterworthCoefficients(float cutoffHz, float sampleRate, bool isHighpass, IIRFilter* filter);
 float applyIIRFilter(float input, IIRFilter* filter);
 void applyPrefiltering(float* samples, uint16_t sampleCount);
 
-// audio subsystem and analysis functions
+// audio capture and pitch analysis functions
 bool initI2S();
 bool captureRealAudio(AudioBuffer* buffer);
 int findCoarsePeriodYIN(const AudioBuffer* input, TuningResult* result);

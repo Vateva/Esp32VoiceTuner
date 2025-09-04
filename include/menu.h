@@ -1,6 +1,7 @@
 #ifndef MENU_H
 #define MENU_H
 
+#include <Preferences.h>
 #include "config.h"
 
 // button state tracking for clean detection
@@ -34,7 +35,7 @@ struct Parameter {
             int minValue;        // minimum allowed value
             int maxValue;        // maximum allowed value
             int stepSize;        // increment step
-            const char* suffix;  // unit suffix (e.g., "c", "Hz", "%")
+            const char* suffix;  // unit suffix (e.g., "c", "hz", "%")
         } intRange;
         struct {
             float* valuePtr;     // pointer to the actual variable
@@ -176,6 +177,11 @@ void returnToMainMenu();
 
 // parameter editing functions
 void cycleParameterValue(MenuItem* item);
+
+// parameter persistence functions
+void saveParametersToFlash();
+void loadParametersFromFlash();
+bool validateParameterRanges();
 
 // menu display functions
 void drawMenuInterface();

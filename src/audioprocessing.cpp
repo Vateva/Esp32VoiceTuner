@@ -1,4 +1,4 @@
-// updated audioprocessing.cpp - add runtime parameters and filter recalculation
+// audio processing with runtime parameters and filter recalculation
 #include "audioprocessing.h"
 #include "utilities.h"
 #include "menu.h"  // add menu.h to access tunerParams
@@ -51,7 +51,7 @@ void calculateButterworthCoefficients(float cutoffHz, float sampleRate, bool isH
 
 // recalculate audio filter coefficients using runtime parameters
 void recalculateAudioFilters() {
-    safePrint("recalculating audio filter coefficients...\n");
+    safePrintf("recalculating audio filter coefficients...\n");
     
     // use runtime parameters instead of constants
     float highpassCutoff = (float)tunerParams.highpassCutoff;
@@ -161,14 +161,14 @@ bool initI2S() {
     // initialize audio filtering subsystem
     initAudioFilters();
     
-    safePrint("I2S initialized successfully\n");
+    safePrintf("I2S initialized successfully\n");
     return true;
 }
 
 // read audio samples via i2s dma with prefiltering and db calculation
 bool captureRealAudio(AudioBuffer* buffer) {
     if (!buffer || !buffer->validate()) {
-        safePrint("ERROR: Invalid buffer in captureRealAudio\n");
+        safePrintf("ERROR: Invalid buffer in captureRealAudio\n");
         return false;
     }
     
@@ -179,7 +179,7 @@ bool captureRealAudio(AudioBuffer* buffer) {
     // allocate temp buffer for raw 32-bit samples
     int32_t* rawSamples = (int32_t*)malloc(buffer->sampleCount * sizeof(int32_t));
     if (!rawSamples) {
-        safePrint("ERROR: Failed to allocate raw sample buffer\n");
+        safePrintf("ERROR: Failed to allocate raw sample buffer\n");
         return false;
     }
     
@@ -187,7 +187,7 @@ bool captureRealAudio(AudioBuffer* buffer) {
     size_t bytesRead = 0;
     esp_err_t result = i2s_read(I2S_PORT, rawSamples, 
                                buffer->sampleCount * sizeof(int32_t), 
-                               &bytesRead, pdMS_TO_TICKS(100));
+                               &bytesRead, pdMS_TO_TICKS(I2S_READ_TIMEOUT_MS));
     
     if (result != ESP_OK) {
         safePrintf("ERROR: i2s_read failed: %s\n", esp_err_to_name(result));
@@ -206,8 +206,7 @@ bool captureRealAudio(AudioBuffer* buffer) {
     // convert 24-bit to normalized float with gain
     for (uint16_t i = 0; i < buffer->sampleCount; i++) {
         int32_t sample24 = rawSamples[i] >> 8;
-        float gain = 3.0f;
-        buffer->samples[i] = (float)sample24 / 8388608.0f * gain;
+        buffer->samples[i] = (float)sample24 / INT24_TO_FLOAT_DIVISOR * AUDIO_GAIN_FACTOR;
     }
     
     free(rawSamples);

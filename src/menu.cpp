@@ -1,4 +1,3 @@
-// updated menu.cpp - implement real parameter application
 #include "menu.h"
 #include "display.h"
 #include "utilities.h"
@@ -113,10 +112,10 @@ void initMenuSystem() {
     menuSystem.lastMenuActivity = millis();
     menuSystem.needsRedraw = false;
     
-    safePrint("streamlined menu system initialized\n");
+    safePrintf("streamlined menu system initialized\n");
     safePrintf("navigation: down=%d (navigate), select=%d (enter/cycle)\n", 
               BUTTON_DOWN_PIN, BUTTON_SELECT_PIN);
-    safePrint("direct parameter cycling: select=cycle values immediately\n");
+    safePrintf("direct parameter cycling: select=cycle values immediately\n");
 }
 
 // read button state with active low logic
@@ -187,7 +186,7 @@ void checkButtonsAndUpdateMenu() {
 
 // activate menu system and switch display
 void triggerMenuEntry() {
-    safePrint("menu activated - direct parameter cycling enabled\n");
+    safePrintf("menu activated - direct parameter cycling enabled\n");
     
     menuSystem.currentMode = MENU_MAIN;
     menuSystem.buttonState = BUTTONS_RELEASED;
@@ -205,7 +204,7 @@ void triggerMenuEntry() {
         xSemaphoreGive(displayMutex);
     }
     
-    safePrint("menu activation debounced - ready for navigation\n");
+    safePrintf("menu activation debounced - ready for navigation\n");
 }
 
 // navigate menu selection downward (with wraparound)
@@ -339,7 +338,7 @@ void cycleParameterValue(MenuItem* item) {
             break;
             
         default:
-            safePrint("cannot cycle this parameter type\n");
+            safePrintf("cannot cycle this parameter type\n");
             return;
     }
     
@@ -351,7 +350,7 @@ void cycleParameterValue(MenuItem* item) {
 
 // return from submenu to main menu
 void returnToMainMenu() {
-    safePrint("returning to main menu\n");
+    safePrintf("returning to main menu\n");
     menuSystem.currentMode = MENU_MAIN;
     
     if (xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
@@ -362,7 +361,7 @@ void returnToMainMenu() {
 
 // exit menu system and apply changes
 void menuActionExit() {
-    safePrint("applying parameter changes and exiting menu\n");
+    safePrintf("applying parameter changes and exiting menu\n");
     
     // apply all non-display parameter changes here
     applyParameterChanges();
@@ -372,7 +371,7 @@ void menuActionExit() {
 
 // exit menu system and return to tuner
 void exitMenuSystem() {
-    safePrint("exiting menu system\n");
+    safePrintf("exiting menu system\n");
     
     // acquire display mutex for clean transition
     if (xSemaphoreTake(displayMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
@@ -382,7 +381,7 @@ void exitMenuSystem() {
         
         // force complete screen clear to remove all menu remnants
         tft.fillScreen(TFT_BLACK);
-        safePrint("screen cleared - removing menu display\n");
+        safePrintf("screen cleared - removing menu display\n");
         
         // now draw fresh tuner interface
         drawTunerInterface();
@@ -394,7 +393,7 @@ void exitMenuSystem() {
         menuSystem.buttonState = BUTTONS_RELEASED;
     }
     
-    safePrint("menu system fully exited - tuner interface restored\n");
+    safePrintf("menu system fully exited - tuner interface restored\n");
 }
 
 // handle menu timeout (auto-exit if inactive)
@@ -403,7 +402,7 @@ void handleMenuTimeout() {
     uint32_t timeoutMs = tunerParams.menuTimeout * 1000; // use runtime parameter
     
     if ((currentTime - menuSystem.lastMenuActivity) > timeoutMs) {
-        safePrint("menu timeout - auto exit\n");
+        safePrintf("menu timeout - auto exit\n");
         exitMenuSystem();
     }
 }
@@ -533,7 +532,7 @@ void applyDisplayChanges() {
 
 // apply all parameter changes when exiting menu
 void applyParameterChanges() {
-    safePrint("applying all parameter changes:\n");
+    safePrintf("applying all parameter changes:\n");
     
     // tuning parameters
     safePrintf("  flat/sharp threshold: %dc\n", tunerParams.flatSharpThreshold);
@@ -555,7 +554,153 @@ void applyParameterChanges() {
     safePrintf("  brightness: %d%% (applied immediately)\n", tunerParams.brightness);
     safePrintf("  show cents: %s (applied immediately)\n", tunerParams.showCents ? "ON" : "OFF");
     
-    safePrint("all parameters applied successfully\n");
+    safePrintf("all parameters applied successfully\n");
+
+    //save to flash after applying changes
+    saveParametersToFlash();
+}
+
+// save all parameters to esp32 flash memory
+void saveParametersToFlash() {
+    Preferences preferences;
+    
+    if (!preferences.begin("tuner_config", false)) {
+        safePrintf("ERROR: failed to open preferences for writing\n");
+        return;
+    }
+    
+    // tuning parameters
+    preferences.putInt("flatSharpThr", tunerParams.flatSharpThreshold);
+    preferences.putInt("yinWindow", tunerParams.yinSearchWindow);
+    preferences.putInt("smoothLevel", tunerParams.smoothingLevel);
+    
+    // audio prefiltering
+    preferences.putInt("hpCutoff", tunerParams.highpassCutoff);
+    preferences.putInt("lpCutoff", tunerParams.lowpassCutoff);
+    
+    // display settings
+    preferences.putInt("brightness", tunerParams.brightness);
+    preferences.putBool("showCents", tunerParams.showCents);
+    
+    // system parameters
+    preferences.putInt("silenceTimeout", tunerParams.silenceTimeout);
+    preferences.putInt("dbActivation", tunerParams.dbActivation);
+    preferences.putInt("dbDeactivation", tunerParams.dbDeactivation);
+    preferences.putInt("menuTimeout", tunerParams.menuTimeout);
+    
+    preferences.end();
+    
+    safePrintf("parameters saved to flash memory\n");
+}
+
+// load all parameters from esp32 flash memory with fallback defaults
+void loadParametersFromFlash() {
+    Preferences preferences;
+    
+    if (!preferences.begin("tuner_config", true)) {
+        safePrintf("no saved parameters found - using defaults\n");
+        return;
+    }
+    
+    // load parameters with current values as fallbacks
+    tunerParams.flatSharpThreshold = preferences.getInt("flatSharpThr", tunerParams.flatSharpThreshold);
+    tunerParams.yinSearchWindow = preferences.getInt("yinWindow", tunerParams.yinSearchWindow);
+    tunerParams.smoothingLevel = preferences.getInt("smoothLevel", tunerParams.smoothingLevel);
+    
+    tunerParams.highpassCutoff = preferences.getInt("hpCutoff", tunerParams.highpassCutoff);
+    tunerParams.lowpassCutoff = preferences.getInt("lpCutoff", tunerParams.lowpassCutoff);
+    
+    tunerParams.brightness = preferences.getInt("brightness", tunerParams.brightness);
+    tunerParams.showCents = preferences.getBool("showCents", tunerParams.showCents);
+    
+    tunerParams.silenceTimeout = preferences.getInt("silenceTimeout", tunerParams.silenceTimeout);
+    tunerParams.dbActivation = preferences.getInt("dbActivation", tunerParams.dbActivation);
+    tunerParams.dbDeactivation = preferences.getInt("dbDeactivation", tunerParams.dbDeactivation);
+    tunerParams.menuTimeout = preferences.getInt("menuTimeout", tunerParams.menuTimeout);
+    
+    preferences.end();
+    
+    // validate loaded parameters are within acceptable ranges
+    if (validateParameterRanges()) {
+        safePrintf("parameters loaded from flash memory\n");
+        safePrintf("loaded: flatSharp=%dc, yinWindow=%d%%, smoothing=%d\n", 
+                  tunerParams.flatSharpThreshold, tunerParams.yinSearchWindow, tunerParams.smoothingLevel);
+        safePrintf("loaded: hp=%dHz, lp=%dHz, brightness=%d%%\n",
+                  tunerParams.highpassCutoff, tunerParams.lowpassCutoff, tunerParams.brightness);
+    } else {
+        safePrintf("WARNING: loaded parameters out of range - using defaults\n");
+    }
+}
+
+// validate all parameters are within acceptable ranges
+bool validateParameterRanges() {
+    bool valid = true;
+    
+    // check tuning parameters
+    if (tunerParams.flatSharpThreshold < 10 || tunerParams.flatSharpThreshold > 25) {
+        tunerParams.flatSharpThreshold = 15;
+        valid = false;
+    }
+    if (tunerParams.yinSearchWindow < 20 || tunerParams.yinSearchWindow > 40) {
+        tunerParams.yinSearchWindow = 40;
+        valid = false;
+    }
+    if (tunerParams.smoothingLevel < 1 || tunerParams.smoothingLevel > 5) {
+        tunerParams.smoothingLevel = 3;
+        valid = false;
+    }
+    
+    // check audio parameters
+    if (tunerParams.highpassCutoff < 60 || tunerParams.highpassCutoff > 120) {
+        tunerParams.highpassCutoff = 60;
+        valid = false;
+    }
+    if (tunerParams.lowpassCutoff < 4000 || tunerParams.lowpassCutoff > 8000) {
+        tunerParams.lowpassCutoff = 6000;
+        valid = false;
+    }
+    
+    // check display parameters
+    if (tunerParams.brightness < 10 || tunerParams.brightness > 100) {
+        tunerParams.brightness = 100;
+        valid = false;
+    }
+    
+    // check system parameters
+    if (tunerParams.silenceTimeout < 2 || tunerParams.silenceTimeout > 10) {
+        tunerParams.silenceTimeout = 5;
+        valid = false;
+    }
+    if (tunerParams.dbActivation < -25 || tunerParams.dbActivation > -10) {
+        tunerParams.dbActivation = -15;
+        valid = false;
+    }
+    if (tunerParams.dbDeactivation < -40 || tunerParams.dbDeactivation > -20) {
+        tunerParams.dbDeactivation = -25;
+        valid = false;
+    }
+    if (tunerParams.menuTimeout < 2 || tunerParams.menuTimeout > 10) {
+        tunerParams.menuTimeout = 10;
+        valid = false;
+    }
+    
+    return valid;
+}
+
+// factory reset all parameters to defaults and save
+void factoryResetParameters() {
+    safePrintf("performing factory reset of all parameters\n");
+    
+    // reset to constructor defaults
+    tunerParams = TunerParameters();
+    
+    // save defaults to flash
+    saveParametersToFlash();
+    
+    // apply changes immediately
+    applyParameterChanges();
+    
+    safePrintf("factory reset complete - all parameters restored to defaults\n");
 }
 
 // setup menu structure with main menu and submenus

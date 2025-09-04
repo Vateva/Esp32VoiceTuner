@@ -1,4 +1,4 @@
-// updated display.h - add brightness control function declaration
+// display control and rendering functions
 #ifndef DISPLAY_H
 #define DISPLAY_H
 
@@ -22,7 +22,7 @@ extern DisplayState displayState;
 
 // display control functions
 void initDisplay();
-void setDisplayBrightness(int brightnessPercent);  // add brightness control function
+void setDisplayBrightness(int brightnessPercent);  // brightness control function
 void drawTunerInterface();
 void drawStaticTunerElements();
 void eraseDynamicCircle();

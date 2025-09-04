@@ -1,4 +1,4 @@
-// updated display.cpp - add brightness control and conditional cents display
+// display control with brightness and conditional cents display
 #include "display.h"
 #include "menu.h"      // add menu.h include for menu state checking
 #include "utilities.h"
@@ -62,17 +62,17 @@ void setDisplayBrightness(int brightnessPercent) {
     static bool pwmInitialized = false;
     if (!pwmInitialized) {
         // configure pwm channel for backlight
-        ledcSetup(0, 5000, 8); // channel 0, 5khz frequency, 8-bit resolution
-        ledcAttachPin(TFT_BLK, 0); // attach backlight pin to pwm channel 0
+        ledcSetup(PWM_CHANNEL, PWM_FREQUENCY, PWM_RESOLUTION); // PWM setup for backlight
+        ledcAttachPin(TFT_BLK, PWM_CHANNEL); // attach backlight pin to pwm channel
         pwmInitialized = true;
-        safePrint("pwm backlight control initialized\n");
+        safePrintf("pwm backlight control initialized\n");
     }
     
     // convert percentage to 8-bit pwm value (0-255)
     int pwmValue = (brightnessPercent * 255) / 100;
     
     // apply pwm to backlight pin
-    ledcWrite(0, pwmValue);
+    ledcWrite(PWM_CHANNEL, pwmValue);
     
     safePrintf("display brightness set to %d%% (pwm=%d)\n", brightnessPercent, pwmValue);
 }
@@ -81,7 +81,7 @@ void setDisplayBrightness(int brightnessPercent) {
 void initDisplay() {
   // initialize backlight with full brightness initially
   setDisplayBrightness(100);
-  safePrint("display backlight enabled\n");
+  safePrintf("display backlight enabled\n");
 
   tft.init();
   tft.setRotation(0);
@@ -95,7 +95,7 @@ void initDisplay() {
   delay(200);
   tft.fillScreen(TFT_BLACK);
 
-  safePrint("display initialized successfully\n");
+  safePrintf("display initialized successfully\n");
   drawTunerInterface();
 }
 
@@ -267,7 +267,7 @@ void drawOptimizedCentsCircle(int cents, uint16_t circleColor) {
 void drawTunerInterface() {
   // only draw tuner interface if menu is not active
   if (isMenuActive()) {
-    safePrint("skipping tuner interface draw - menu is active\n");
+    safePrintf("skipping tuner interface draw - menu is active\n");
     return;
   }
   
@@ -338,7 +338,7 @@ void updateTunerDisplay(const char *note, int cents, TuningResult *result,
     // optional debug output (only occasionally to avoid spam)
     static uint32_t menuSkipCounter = 0;
     if ((menuSkipCounter++ % 64) == 0) {
-      safePrint("skipping tuner display update - menu is active\n");
+      safePrintf("skipping tuner display update - menu is active\n");
     }
     return;
   }
