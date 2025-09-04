@@ -1,4 +1,3 @@
-// audio processing with runtime parameters and filter recalculation
 #include "audioprocessing.h"
 #include "utilities.h"
 #include "menu.h"  // add menu.h to access tunerParams

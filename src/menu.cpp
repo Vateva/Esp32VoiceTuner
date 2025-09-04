@@ -107,7 +107,6 @@ void initMenuSystem() {
     
     // initialize menu system state
     menuSystem.currentMode = MENU_HIDDEN;
-    menuSystem.buttonState = BUTTONS_RELEASED;
     menuSystem.lastButtonCheck = millis();
     menuSystem.lastMenuActivity = millis();
     menuSystem.needsRedraw = false;
@@ -189,7 +188,6 @@ void triggerMenuEntry() {
     safePrintf("menu activated - direct parameter cycling enabled\n");
     
     menuSystem.currentMode = MENU_MAIN;
-    menuSystem.buttonState = BUTTONS_RELEASED;
     menuSystem.mainMenuIndex = 0;
     menuSystem.subMenuIndex = 0;
     menuSystem.needsRedraw = true;
@@ -377,7 +375,6 @@ void exitMenuSystem() {
     if (xSemaphoreTake(displayMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
         // set menu to hidden state BEFORE clearing screen
         menuSystem.currentMode = MENU_HIDDEN;
-        menuSystem.buttonState = BUTTONS_RELEASED;
         
         // force complete screen clear to remove all menu remnants
         tft.fillScreen(TFT_BLACK);
@@ -390,7 +387,6 @@ void exitMenuSystem() {
     } else {
         // fallback if mutex fails - still update menu state
         menuSystem.currentMode = MENU_HIDDEN;
-        menuSystem.buttonState = BUTTONS_RELEASED;
     }
     
     safePrintf("menu system fully exited - tuner interface restored\n");

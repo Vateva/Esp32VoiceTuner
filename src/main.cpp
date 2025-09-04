@@ -30,6 +30,7 @@ void setup() {
                   (currentPowerState == DETECTING) ? "DETECTING" : "ANALYZING");
 #endif
     
+    
     // display hardware setup
     initDisplay();
     
@@ -45,7 +46,7 @@ void setup() {
     tft.drawCenterString("2-BUTTON MENU OK", 120, 210);
     delay(500);
         
-    // load saved parameters from flash
+    //load saved parameters from flash
     safePrintf("loading saved parameters...\n");
     loadParametersFromFlash();
     

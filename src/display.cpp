@@ -1,4 +1,3 @@
-// display control with brightness and conditional cents display
 #include "display.h"
 #include "menu.h"      // add menu.h include for menu state checking
 #include "utilities.h"

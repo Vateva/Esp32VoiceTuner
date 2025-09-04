@@ -4,11 +4,6 @@
 #include <Preferences.h>
 #include "config.h"
 
-// button state tracking for clean detection
-enum ButtonState {
-    BUTTONS_RELEASED         // no buttons pressed
-
-};
 
 // menu system operational states
 enum MenuMode {
@@ -35,7 +30,7 @@ struct Parameter {
             int minValue;        // minimum allowed value
             int maxValue;        // maximum allowed value
             int stepSize;        // increment step
-            const char* suffix;  // unit suffix (e.g., "c", "hz", "%")
+            const char* suffix;  // unit suffix (e.g., "c", "Hz", "%")
         } intRange;
         struct {
             float* valuePtr;     // pointer to the actual variable
@@ -134,7 +129,6 @@ struct TunerParameters {
 // complete menu system state
 struct MenuSystem {
     MenuMode currentMode;           // current menu operational state
-    ButtonState buttonState;        // current button detection state
     uint32_t buttonPressTime;       // timestamp when both buttons first pressed
     uint32_t lastButtonCheck;       // timestamp of last button poll
     uint32_t lastMenuActivity;      // timestamp of last menu interaction
@@ -151,7 +145,7 @@ struct MenuSystem {
     // display state  
     bool needsRedraw;              // full menu redraw required
     
-    MenuSystem() : currentMode(MENU_HIDDEN), buttonState(BUTTONS_RELEASED),
+    MenuSystem() : currentMode(MENU_HIDDEN),
                   buttonPressTime(0), lastButtonCheck(0), lastMenuActivity(0),
                   mainMenuIndex(0), subMenuIndex(0), currentMainItem(0),
                   mainMenu(nullptr), mainMenuCount(0), needsRedraw(false) {}
