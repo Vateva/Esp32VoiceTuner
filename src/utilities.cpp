@@ -412,7 +412,7 @@ bool applySmoothingFilter(TuningResult* result, const AudioBuffer* buffer,
     result->centsOffset = (int)roundf(state->smoothedCents);
     
     // recalculate note name based on smoothed frequency
-    const char* noteNames[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+    const char* const* noteNames = NOTE_NAME_SYSTEMS[tunerParams.noteNaming];
     float semitonesFromA4 = 12.0f * log2f(result->frequency / 440.0f);
     int totalSemitones = (int)roundf(semitonesFromA4);
     int octave = 4 + (totalSemitones + 9) / 12;

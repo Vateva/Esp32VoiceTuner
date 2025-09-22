@@ -573,33 +573,157 @@ bool yinAnalysis(const AudioBuffer* input, TuningResult* output, int hintedPerio
     return output->validate();
 }
 
-// frequency to musical note conversion
-void convertFrequencyToNote(float frequency, char* noteName, size_t nameSize) {
+// build array of absolute semitone values for a given scale and root
+void buildScaleNotes(int scaleType, int rootNote, int* scaleNotes, int* noteCount) {
+    if (!scaleNotes || !noteCount || scaleType < 0 || scaleType >= SCALE_COUNT || 
+        rootNote < 0 || rootNote >= NOTE_COUNT) {
+        *noteCount = 0;
+        return;
+    }
+    
+    const ScaleDefinition* scale = &SCALE_DEFINITIONS[scaleType];
+    *noteCount = scale->noteCount;
+    
+    // build scale notes by adding root note offset to scale intervals
+    for (int i = 0; i < scale->noteCount; i++) {
+        scaleNotes[i] = (rootNote + scale->intervals[i]) % 12;
+    }
+}
+
+// find the closest scale note to a detected frequency
+// returns the chromatic note index (0-11) of the nearest scale note
+int findNearestScaleNote(float frequency, int scaleType, int rootNote) {
+    if (frequency <= 0 || scaleType < 0 || scaleType >= SCALE_COUNT || 
+        rootNote < 0 || rootNote >= NOTE_COUNT) {
+        return -1;
+    }
+    
+    // convert frequency to semitones from A4 (440 Hz reference)
+    float semitonesFromA4 = 12.0f * log2f(frequency / A4_REFERENCE_PITCH);
+    
+    // get the chromatic note (0-11) ignoring octave
+    float totalSemitones = semitonesFromA4 + 9.0f; // +9 because A is 9 semitones from C
+    int chromaticNote = ((int)roundf(totalSemitones) % 12 + 12) % 12;
+    
+    // build scale notes array
+    int scaleNotes[MAX_SCALE_NOTES];
+    int noteCount;
+    buildScaleNotes(scaleType, rootNote, scaleNotes, &noteCount);
+    
+    if (noteCount == 0) {
+        return chromaticNote; // fallback to chromatic if scale invalid
+    }
+    
+    // find nearest scale note
+    int nearestScaleNote = scaleNotes[0];
+    int minDistance = 12; // maximum possible distance in semitones
+    
+    for (int i = 0; i < noteCount; i++) {
+        // calculate distance considering octave wrapping
+        int distance1 = abs(chromaticNote - scaleNotes[i]);
+        int distance2 = 12 - distance1; // wrapped distance
+        int distance = (distance1 < distance2) ? distance1 : distance2;
+        
+        if (distance < minDistance) {
+            minDistance = distance;
+            nearestScaleNote = scaleNotes[i];
+        }
+    }
+    
+    return nearestScaleNote;
+}
+
+// convert frequency to scale-based note name with specified naming system
+void convertFrequencyToScaleNote(float frequency, char* noteName, size_t nameSize, 
+                                 int scaleType, int rootNote, int noteNaming) {
     if (!noteName || nameSize < 4 || frequency <= 0) return;
     
-    const char* noteNames[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+    // validate parameters
+    if (scaleType < 0 || scaleType >= SCALE_COUNT) scaleType = SCALE_CHROMATIC;
+    if (rootNote < 0 || rootNote >= NOTE_COUNT) rootNote = 0;  // fallback to C (index 0)
+    if (noteNaming < 0 || noteNaming >= NAMING_COUNT) noteNaming = NAMING_ENGLISH;
     
-    // semitones from A4
+    // find nearest scale note
+    int nearestNote = findNearestScaleNote(frequency, scaleType, rootNote);
+    if (nearestNote < 0) nearestNote = 0; // fallback to C
+    
+    // calculate octave
     float semitonesFromA4 = 12.0f * log2f(frequency / A4_REFERENCE_PITCH);
     int totalSemitones = (int)roundf(semitonesFromA4);
     
-    // calculate octave and note index
+    // adjust total semitones to match nearest scale note
+    float actualSemitones = semitonesFromA4 + 9.0f; // +9 because A is 9 semitones from C
+    int actualNote = ((int)roundf(actualSemitones) % 12 + 12) % 12;
+    int noteAdjustment = nearestNote - actualNote;
+    
+    // handle octave wrapping for note adjustment
+    if (noteAdjustment > 6) noteAdjustment -= 12;
+    if (noteAdjustment < -6) noteAdjustment += 12;
+    
+    totalSemitones += noteAdjustment;
+    
+    // calculate final octave
     int octave = 4 + (totalSemitones + 9) / 12;
     if (totalSemitones + 9 < 0) octave--;
     
-    int noteIndex = ((totalSemitones + 9) % 12 + 12) % 12;
+    // get note name from appropriate naming system
+    const char* baseNoteName = NOTE_NAME_SYSTEMS[noteNaming][nearestNote];
     
-    snprintf(noteName, nameSize, "%s%d", noteNames[noteIndex], octave);
+    snprintf(noteName, nameSize, "%s%d", baseNoteName, octave);
 }
 
-// cents deviation from equal temperament
-int calculateCentsOffset(float frequency) {
+// calculate cents offset from nearest scale note
+int calculateScaleCentsOffset(float frequency, int scaleType, int rootNote) {
     if (frequency <= 0) return 0;
-
+    
+    // validate parameters
+    if (scaleType < 0 || scaleType >= SCALE_COUNT) scaleType = SCALE_CHROMATIC;
+    if (rootNote < 0 || rootNote >= NOTE_COUNT) rootNote = 0;  // fallback to C (index 0)
+    
+    // find nearest scale note
+    int nearestNote = findNearestScaleNote(frequency, scaleType, rootNote);
+    if (nearestNote < 0) return 0;
+    
+    // calculate the perfect frequency for this scale note
     float semitonesFromA4 = 12.0f * log2f(frequency / A4_REFERENCE_PITCH);
-    float nearestSemitone = roundf(semitonesFromA4);
+    int totalSemitones = (int)roundf(semitonesFromA4);
+    
+    // adjust to match nearest scale note
+    float actualSemitones = semitonesFromA4 + 9.0f; // +9 because A is 9 semitones from C
+    int actualNote = ((int)roundf(actualSemitones) % 12 + 12) % 12;
+    int noteAdjustment = nearestNote - actualNote;
+    
+    // handle octave wrapping
+    if (noteAdjustment > 6) noteAdjustment -= 12;
+    if (noteAdjustment < -6) noteAdjustment += 12;
+    
+    float adjustedSemitones = semitonesFromA4 + noteAdjustment;
+    float nearestSemitone = roundf(adjustedSemitones);
     float perfectFrequency = A4_REFERENCE_PITCH * powf(2.0f, nearestSemitone / 12.0f);
-    int centsOffset = 1200.0f * log2f(frequency / perfectFrequency);
+    
+    // calculate cents offset
+    int centsOffset = (int)roundf(1200.0f * log2f(frequency / perfectFrequency));
     
     return centsOffset;
+}
+
+// frequency to musical note conversion using current scale settings
+void convertFrequencyToNote(float frequency, char* noteName, size_t nameSize) {
+    if (!noteName || nameSize < 4 || frequency <= 0) return;
+    
+    // use current scale settings from tuner parameters
+    convertFrequencyToScaleNote(frequency, noteName, nameSize,
+                               tunerParams.scaleType, 
+                               tunerParams.rootNote, 
+                               tunerParams.noteNaming);
+}
+
+// cents deviation from equal temperament using current scale settings
+int calculateCentsOffset(float frequency) {
+    if (frequency <= 0) return 0;
+    
+    // use current scale settings from tuner parameters
+    return calculateScaleCentsOffset(frequency, 
+                                   tunerParams.scaleType, 
+                                   tunerParams.rootNote);
 }

@@ -18,4 +18,10 @@ bool yinAnalysis(const AudioBuffer* input, TuningResult* output, int hintedPerio
 void convertFrequencyToNote(float frequency, char* noteName, size_t nameSize);
 int calculateCentsOffset(float frequency);
 
+// scale-based note conversion functions
+void buildScaleNotes(int scaleType, int rootNote, int* scaleNotes, int* noteCount);
+int findNearestScaleNote(float frequency, int scaleType, int rootNote);
+void convertFrequencyToScaleNote(float frequency, char* noteName, size_t nameSize, int scaleType, int rootNote, int noteNaming);
+int calculateScaleCentsOffset(float frequency, int scaleType, int rootNote);
+
 #endif // AUDIOPROCESSING_H

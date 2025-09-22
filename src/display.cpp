@@ -313,7 +313,7 @@ void displayDetectingMode() {
     tft.setTextSize(1);
     tft.setTextColor(TFT_DARKGREY);
     tft.drawCenterString("listening...", 120, 125);
-    
+
     // show power saving indicator
     tft.setTextColor(TFT_GREEN);
     char cpuStr[16];

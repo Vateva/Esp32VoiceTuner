@@ -171,9 +171,9 @@
 #define NOTE_TEXT_POS_Y 120
 #define CENTS_TEXT_POS_X 120
 #define CENTS_TEXT_POS_Y 97
-#define TEXT_CLEAR_AREA_X 93
+#define TEXT_CLEAR_AREA_X 75
 #define TEXT_CLEAR_AREA_Y 97
-#define TEXT_CLEAR_AREA_WIDTH 51
+#define TEXT_CLEAR_AREA_WIDTH 80
 #define TEXT_CLEAR_AREA_HEIGHT 44
 #define CENTS_UPDATE_THRESHOLD 2 // Cents change needed to trigger redraw
 
@@ -206,6 +206,115 @@
 #define MENU_TITLE_COLOR           TFT_CYAN       // menu title text
 #define MENU_ITEM_COLOR            TFT_WHITE      // normal menu item text
 #define MENU_SELECTED_COLOR        TFT_GREEN      // selected menu item text
+
+
+// =================================================================
+// MUSICAL SCALE AND NOTE NAMING SYSTEM
+// =================================================================
+
+// chromatic note enumeration for root note selection
+// values correspond to semitone offsets from C
+enum ChromaticNote {
+    TUNER_NOTE_C = 0,      // c
+    TUNER_NOTE_CS = 1,     // c# / db
+    TUNER_NOTE_D = 2,      // d
+    TUNER_NOTE_DS = 3,     // d# / eb
+    TUNER_NOTE_E = 4,      // e
+    TUNER_NOTE_F = 5,      // f
+    TUNER_NOTE_FS = 6,     // f# / gb
+    TUNER_NOTE_G = 7,      // g
+    TUNER_NOTE_GS = 8,     // g# / ab
+    TUNER_NOTE_A = 9,      // a
+    TUNER_NOTE_AS = 10,    // a# / bb
+    TUNER_NOTE_B = 11,     // b
+    NOTE_COUNT = 12  // total chromatic notes
+};
+
+// musical scale type enumeration for scale selection
+enum ScaleType {
+    SCALE_CHROMATIC = 0,        // all 12 notes (current behavior)
+    SCALE_MAJOR,                // major scale (ionian mode)
+    SCALE_NATURAL_MINOR,        // natural minor scale (aeolian mode)
+    SCALE_HARMONIC_MINOR,       // harmonic minor scale
+    SCALE_MELODIC_MINOR,        // melodic minor scale (ascending)
+    SCALE_PENTATONIC_MAJOR,     // major pentatonic scale
+    SCALE_PENTATONIC_MINOR,     // minor pentatonic scale
+    SCALE_BLUES,                // blues scale
+    SCALE_DORIAN,               // dorian mode
+    SCALE_MIXOLYDIAN,           // mixolydian mode
+    SCALE_COUNT                 // total number of scales
+};
+
+// note naming system enumeration
+enum NoteNamingSystem {
+    NAMING_ENGLISH = 0,     // c, d, e, f, g, a, b (english/german system)
+    NAMING_SPANISH,         // do, re, mi, fa, sol, la, si (spanish solfège)
+    NAMING_COUNT
+};
+
+// scale definition structure
+// stores semitone intervals from root note for each scale
+struct ScaleDefinition {
+    const int* intervals;       // array of semitone offsets from root
+    int noteCount;              // number of notes in scale
+    const char* name;           // human-readable scale name
+};
+
+// maximum notes in any scale (chromatic has 12)
+#define MAX_SCALE_NOTES 12
+
+// chromatic scale intervals (all 12 semitones)
+const int CHROMATIC_INTERVALS[12] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+
+// major scale intervals (W-W-H-W-W-W-H pattern)
+const int MAJOR_INTERVALS[7] = {0, 2, 4, 5, 7, 9, 11};
+
+// natural minor scale intervals (W-H-W-W-H-W-W pattern)
+const int NATURAL_MINOR_INTERVALS[7] = {0, 2, 3, 5, 7, 8, 10};
+
+// harmonic minor scale intervals (natural minor with raised 7th)
+const int HARMONIC_MINOR_INTERVALS[7] = {0, 2, 3, 5, 7, 8, 11};
+
+// melodic minor scale intervals (natural minor with raised 6th and 7th)
+const int MELODIC_MINOR_INTERVALS[7] = {0, 2, 3, 5, 7, 9, 11};
+
+// major pentatonic scale intervals
+const int PENTATONIC_MAJOR_INTERVALS[5] = {0, 2, 4, 7, 9};
+
+// minor pentatonic scale intervals
+const int PENTATONIC_MINOR_INTERVALS[5] = {0, 3, 5, 7, 10};
+
+// blues scale intervals (minor pentatonic + blue note)
+const int BLUES_INTERVALS[6] = {0, 3, 5, 6, 7, 10};
+
+// dorian mode intervals (natural minor with raised 6th)
+const int DORIAN_INTERVALS[7] = {0, 2, 3, 5, 7, 9, 10};
+
+// mixolydian mode intervals (major with lowered 7th)
+const int MIXOLYDIAN_INTERVALS[7] = {0, 2, 4, 5, 7, 9, 10};
+
+// scale definition table - maps scale enum to intervals and metadata
+// stored in flash memory for efficiency
+const ScaleDefinition SCALE_DEFINITIONS[SCALE_COUNT] = {
+    {CHROMATIC_INTERVALS, 12, "Chromatic"},
+    {MAJOR_INTERVALS, 7, "Major"},
+    {NATURAL_MINOR_INTERVALS, 7, "Natural Minor"},
+    {HARMONIC_MINOR_INTERVALS, 7, "Harmonic Minor"},
+    {MELODIC_MINOR_INTERVALS, 7, "Melodic Minor"},
+    {PENTATONIC_MAJOR_INTERVALS, 5, "Major Pentatonic"},
+    {PENTATONIC_MINOR_INTERVALS, 5, "Minor Pentatonic"},
+    {BLUES_INTERVALS, 6, "Blues"},
+    {DORIAN_INTERVALS, 7, "Dorian"},
+    {MIXOLYDIAN_INTERVALS, 7, "Mixolydian"}
+};
+
+// note names in different languages - true 2D array
+const char* const NOTE_NAME_SYSTEMS[NAMING_COUNT][NOTE_COUNT] = {
+    // NAMING_ENGLISH (index 0)
+    {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"},
+    // NAMING_SPANISH (index 1) 
+    {"Do", "Do#", "Re", "Re#", "Mi", "Fa", "Fa#", "Sol", "Sol#", "La", "La#", "Si"}
+};
 
 // power management states
 enum PowerState {

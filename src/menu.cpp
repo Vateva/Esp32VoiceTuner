@@ -5,7 +5,7 @@
 #include <esp_timer.h>
 
 /*
- * streamlined menu system with direct parameter cycling:
+ * menu system with direct parameter cycling:
  * 
  * navigation:
  * - gpio 10 (down) = navigate down through menu items
@@ -61,6 +61,8 @@ MenuItem tuningSubmenu[] = {
     MenuItem("Flat/Sharp Threshold", createIntRangeParam(&tunerParams.flatSharpThreshold, 10, 25, 1, "c")),
     MenuItem("YIN Search Window", createIntRangeParam(&tunerParams.yinSearchWindow, 20, 40, 5, "%")),
     MenuItem("Smoothing Level", createIntRangeParam(&tunerParams.smoothingLevel, 1, 5, 1, "")),
+    MenuItem("Scale Type", createIntRangeParam(&tunerParams.scaleType, 0, SCALE_COUNT-1, 1, "")),
+    MenuItem("Root Note", createIntRangeParam(&tunerParams.rootNote, 0, NOTE_COUNT-1, 1, "")),
     MenuItem("Back", nullptr)
 };
 
@@ -75,6 +77,7 @@ MenuItem audioSubmenu[] = {
 MenuItem displaySubmenu[] = {
     MenuItem("Brightness", createIntRangeParam(&tunerParams.brightness, 10, 100, 10, "%")),
     MenuItem("Show Cents", createBoolParam(&tunerParams.showCents, "ON", "OFF")),
+    MenuItem("Note Names", createIntRangeParam(&tunerParams.noteNaming, 0, NAMING_COUNT-1, 1, "")),
     MenuItem("Back", nullptr)
 };
 
@@ -89,9 +92,9 @@ MenuItem systemSubmenu[] = {
 
 // main menu structure (references submenus defined above)
 MenuItem mainMenu[] = {
-    MenuItem("Tuning Parameters", tuningSubmenu, 4),
+    MenuItem("Tuning Parameters", tuningSubmenu, 6),
     MenuItem("Audio Prefiltering", audioSubmenu, 3),
-    MenuItem("Display", displaySubmenu, 3),
+    MenuItem("Display", displaySubmenu, 4),
     MenuItem("System", systemSubmenu, 5),
     MenuItem("Exit", menuActionExit)
 };
@@ -491,8 +494,46 @@ void formatParameterValue(const Parameter& param, char* buffer, size_t bufferSiz
     
     switch (param.type) {
         case PARAM_INT_RANGE:
-            snprintf(buffer, bufferSize, "%d%s", 
-                    *(param.intRange.valuePtr), param.intRange.suffix);
+            // check for special scale parameters that need text display
+            if (param.intRange.valuePtr == &tunerParams.scaleType) {
+                // display scale name using simplified structure
+                int scaleType = *(param.intRange.valuePtr);
+                if (scaleType >= 0 && scaleType < SCALE_COUNT) {
+                    const char* scaleName = SCALE_DEFINITIONS[scaleType].name;
+                    strncpy(buffer, scaleName, bufferSize - 1);
+                    buffer[bufferSize - 1] = '\0';
+                } else {
+                    strcpy(buffer, "Invalid");
+                }
+            } 
+            else if (param.intRange.valuePtr == &tunerParams.rootNote) {
+                // display note name using true 2D array
+                int rootNote = *(param.intRange.valuePtr);
+                if (rootNote >= 0 && rootNote < NOTE_COUNT && 
+                    tunerParams.noteNaming >= 0 && tunerParams.noteNaming < NAMING_COUNT) {
+                    const char* noteName = NOTE_NAME_SYSTEMS[tunerParams.noteNaming][rootNote];
+                    strncpy(buffer, noteName, bufferSize - 1);
+                    buffer[bufferSize - 1] = '\0';
+                } else {
+                    strcpy(buffer, "Invalid");
+                }
+            }
+            else if (param.intRange.valuePtr == &tunerParams.noteNaming) {
+                // display language name
+                int naming = *(param.intRange.valuePtr);
+                if (naming == NAMING_ENGLISH) {
+                    strcpy(buffer, "English");
+                } else if (naming == NAMING_SPANISH) {
+                    strcpy(buffer, "Solfège");
+                } else {
+                    strcpy(buffer, "Invalid");
+                }
+            }
+            else {
+                // regular integer parameter - show number with suffix
+                snprintf(buffer, bufferSize, "%d%s", 
+                        *(param.intRange.valuePtr), param.intRange.suffix);
+            }
             break;
             
         case PARAM_FLOAT_RANGE:
@@ -569,6 +610,8 @@ void saveParametersToFlash() {
     preferences.putInt("flatSharpThr", tunerParams.flatSharpThreshold);
     preferences.putInt("yinWindow", tunerParams.yinSearchWindow);
     preferences.putInt("smoothLevel", tunerParams.smoothingLevel);
+    preferences.putInt("scaleType", tunerParams.scaleType);
+    preferences.putInt("rootNote", tunerParams.rootNote);
     
     // audio prefiltering
     preferences.putInt("hpCutoff", tunerParams.highpassCutoff);
@@ -577,7 +620,8 @@ void saveParametersToFlash() {
     // display settings
     preferences.putInt("brightness", tunerParams.brightness);
     preferences.putBool("showCents", tunerParams.showCents);
-    
+    preferences.putInt("noteNaming", tunerParams.noteNaming);
+
     // system parameters
     preferences.putInt("silenceTimeout", tunerParams.silenceTimeout);
     preferences.putInt("dbActivation", tunerParams.dbActivation);
@@ -602,13 +646,16 @@ void loadParametersFromFlash() {
     tunerParams.flatSharpThreshold = preferences.getInt("flatSharpThr", tunerParams.flatSharpThreshold);
     tunerParams.yinSearchWindow = preferences.getInt("yinWindow", tunerParams.yinSearchWindow);
     tunerParams.smoothingLevel = preferences.getInt("smoothLevel", tunerParams.smoothingLevel);
-    
+    tunerParams.scaleType = preferences.getInt("scaleType", tunerParams.scaleType);
+    tunerParams.rootNote = preferences.getInt("rootNote", tunerParams.rootNote);
+
     tunerParams.highpassCutoff = preferences.getInt("hpCutoff", tunerParams.highpassCutoff);
     tunerParams.lowpassCutoff = preferences.getInt("lpCutoff", tunerParams.lowpassCutoff);
     
     tunerParams.brightness = preferences.getInt("brightness", tunerParams.brightness);
     tunerParams.showCents = preferences.getBool("showCents", tunerParams.showCents);
-    
+    tunerParams.noteNaming = preferences.getInt("noteNaming", tunerParams.noteNaming);
+
     tunerParams.silenceTimeout = preferences.getInt("silenceTimeout", tunerParams.silenceTimeout);
     tunerParams.dbActivation = preferences.getInt("dbActivation", tunerParams.dbActivation);
     tunerParams.dbDeactivation = preferences.getInt("dbDeactivation", tunerParams.dbDeactivation);
@@ -645,7 +692,15 @@ bool validateParameterRanges() {
         tunerParams.smoothingLevel = 3;
         valid = false;
     }
-    
+    if (tunerParams.scaleType < 0 || tunerParams.scaleType >= SCALE_COUNT) {
+    tunerParams.scaleType = 0;  // SCALE_CHROMATIC
+    valid = false;
+    }
+    if (tunerParams.rootNote < 0 || tunerParams.rootNote >= NOTE_COUNT) {
+        tunerParams.rootNote = 0;   // NOTE_C
+        valid = false;
+    }
+
     // check audio parameters
     if (tunerParams.highpassCutoff < 60 || tunerParams.highpassCutoff > 120) {
         tunerParams.highpassCutoff = 60;
@@ -661,7 +716,11 @@ bool validateParameterRanges() {
         tunerParams.brightness = 100;
         valid = false;
     }
-    
+    if (tunerParams.noteNaming < 0 || tunerParams.noteNaming >= NAMING_COUNT) {
+    tunerParams.noteNaming = 0; // NAMING_ENGLISH
+    valid = false;
+    }
+
     // check system parameters
     if (tunerParams.silenceTimeout < 2 || tunerParams.silenceTimeout > 10) {
         tunerParams.silenceTimeout = 5;
