@@ -60,7 +60,5 @@ float calculateFrequencyStability(SmoothingState* state);
 float calculateOverallConfidence(const TuningResult* result, const AudioBuffer* buffer, 
                                 SmoothingState* state);
 float calculateDynamicAlpha(float confidence);
-bool applySmoothingFilter(TuningResult* result, const AudioBuffer* buffer, 
-                         SmoothingState* state);
 
 #endif // UTILITIES_H

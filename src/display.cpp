@@ -1,11 +1,10 @@
 #include "display.h"
 #include "menu.h"      // add menu.h include for menu state checking
 #include "utilities.h"
-#include <esp_timer.h>
 
 // global display instance
 LGFX tft;
-DisplayState displayState = {"", 0.0f, 0, true, 0, 0, false, SmoothingState(), DETECTING, false};
+DisplayState displayState = {"", 0.0f, 0, true, 0, 0, false, DETECTING, false};
 
 // lovyangfx spi bus configuration
 LGFX::LGFX(void) {
@@ -78,21 +77,10 @@ void setDisplayBrightness(int brightnessPercent) {
 
 // hardware initialization and test sequence
 void initDisplay() {
-  // initialize backlight with full brightness initially
-  setDisplayBrightness(100);
   safePrintf("display backlight enabled\n");
 
   tft.init();
   tft.setRotation(0);
-
-  // rgb test sequence
-  tft.fillScreen(TFT_RED);
-  delay(200);
-  tft.fillScreen(TFT_GREEN);
-  delay(200);
-  tft.fillScreen(TFT_BLUE);
-  delay(200);
-  tft.fillScreen(TFT_BLACK);
 
   safePrintf("display initialized successfully\n");
   drawTunerInterface();
@@ -276,8 +264,6 @@ void drawTunerInterface() {
   displayState.needsFullRedraw = false;
   displayState.showingDetectingMode = false;
   
-  // reset smoothing state when interface redraws
-  displayState.smoothing.reset();
   
   drawStaticTunerElements();
 }
@@ -330,7 +316,7 @@ void displayDetectingMode() {
 }
 
 // update tuner display with new pitch data
-void updateTunerDisplay(const char *note, int cents, TuningResult *result,
+void updateTunerDisplay(const char *note, int cents, const TuningResult *result,
                         bool hasAudio) {
   // abort immediately if menu is active - menu has display priority
   if (isMenuActive()) {
@@ -345,12 +331,6 @@ void updateTunerDisplay(const char *note, int cents, TuningResult *result,
   if (!displayMutex)
     return;
 
-  // timestamp display update start
-  if (result) {
-    result->displayStartTime = esp_timer_get_time();
-    printTiming("display start", result->bufferID, result->displayStartTime,
-                result->captureTime);
-  }
 
   // acquire display mutex with timeout
   if (xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
@@ -360,7 +340,7 @@ void updateTunerDisplay(const char *note, int cents, TuningResult *result,
       return;
     }
     
-    // ensure we're not in detecting mode display
+    // ensure we are not in detecting mode display
     if (displayState.showingDetectingMode) {
       drawTunerInterface(); // redraw full interface
       displayState.showingDetectingMode = false;
@@ -424,17 +404,10 @@ void updateTunerDisplay(const char *note, int cents, TuningResult *result,
     displayState.powerState = currentPowerState;
 
     xSemaphoreGive(displayMutex);
-
-    // timestamp display update end
-    if (result) {
-      result->displayEndTime = esp_timer_get_time();
-      printTiming("display end", result->bufferID, result->displayEndTime,
-                  result->captureTime);
-    }
   }
 }
 
-// main display update with confidence-based smoothing
+// main display update (receives already-smoothed results from audioprocessing)
 void displayResult(const TuningResult *result, const AudioBuffer *buffer) {
   // abort immediately if menu is active - menu has display priority
   if (isMenuActive()) {
@@ -446,8 +419,6 @@ void displayResult(const TuningResult *result, const AudioBuffer *buffer) {
     if (displayState.lastNoteName[0] != '\0') {
       updateTunerDisplay("--", 0.0f, nullptr, false);
       displayState.lastNoteName[0] = '\0';
-      // reset smoothing on signal loss
-      displayState.smoothing.reset();
     }
     return;
   }
@@ -456,53 +427,24 @@ void displayResult(const TuningResult *result, const AudioBuffer *buffer) {
   UBaseType_t queueDepth = uxQueueMessagesWaiting(audioQueue);
   bool skipDisplayUpdate = (queueDepth > QUEUE_FULL_SKIP_THRESHOLD);
 
-  // create mutable copy for smoothing
-  TuningResult smoothedResult = *result;
-
-  // apply confidence-based ema smoothing
-  bool smoothingSuccess = applySmoothingFilter(&smoothedResult, buffer, &displayState.smoothing);
-  
-  if (!smoothingSuccess) {
-    // low confidence reading - don't update display, but still track in smoothing
-    if (ENABLE_TIMING_DEBUG) {
-      safePrintf("smoothing rejected result: conf=%.3f, freq=%.1f\n", 
-                smoothedResult.overallConfidence, smoothedResult.frequency);
-    }
-    return;
-  }
-
-  // determine if display update needed (using smoothed values)
+  // determine if display update needed (result is already smoothed)
   bool needsUpdate = false;
 
-  if (strcmp(smoothedResult.noteName, displayState.lastNoteName) != 0) {
+  if (strcmp(result->noteName, displayState.lastNoteName) != 0) {
     needsUpdate = true;
   }
 
-  if (abs(smoothedResult.centsOffset - displayState.lastCentsOffset) > CENTS_UPDATE_THRESHOLD) {
+  if (abs(result->centsOffset - displayState.lastCentsOffset) > CENTS_UPDATE_THRESHOLD) {
     needsUpdate = true;
   }
 
   // perform display update if needed and not skipping
   if ((needsUpdate || displayState.needsFullRedraw) && !skipDisplayUpdate) {
-    updateTunerDisplay(smoothedResult.noteName, smoothedResult.centsOffset, &smoothedResult,
-                       true);
+    updateTunerDisplay(result->noteName, result->centsOffset, result, true);
     displayState.lastUpdateTime = millis();
 
-    strcpy(displayState.lastNoteName, smoothedResult.noteName);
-    displayState.lastCentsOffset = smoothedResult.centsOffset;
-  } else if (skipDisplayUpdate) {
-    // fake timing for skipped update
-    smoothedResult.displayStartTime = esp_timer_get_time();
-    smoothedResult.displayEndTime = smoothedResult.displayStartTime + 1000;
-    printTiming("display skipped", smoothedResult.bufferID,
-                smoothedResult.displayEndTime, smoothedResult.captureTime);
+    strcpy(displayState.lastNoteName, result->noteName);
+    displayState.lastCentsOffset = result->centsOffset;
   }
 
-  // output timing summary (use smoothed result for consistency)
-  if (buffer) {
-    printTimingSummary(&smoothedResult, buffer);
-  }
-
-  // update performance statistics
-  uint64_t totalLatency = smoothedResult.displayEndTime - result->captureTime;
 }

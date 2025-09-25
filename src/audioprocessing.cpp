@@ -7,6 +7,9 @@
 // global audio filter state
 AudioFilters audioFilters;
 
+// global smoothing state for temporal filtering
+SmoothingState smoothingState;
+
 // yin period candidate with scoring metrics
 struct YinCandidate {
     int period;           // samples per cycle
@@ -549,19 +552,26 @@ bool yinAnalysis(const AudioBuffer* input, TuningResult* output, int hintedPerio
         betterPeriod = (float)bestPeriod;
     }
     
-    // convert to musical notation
+    // set frequency only
     output->frequency = ((float)I2S_SAMPLE_RATE / betterPeriod);
-    convertFrequencyToNote(output->frequency, output->noteName, sizeof(output->noteName));
-    output->centsOffset = calculateCentsOffset(output->frequency);
+
+    // store confidence metrics for smoothing (raw values)
+    output->yinConfidence = bestYinValue;           
+    output->harmonicConfidence = bestHarmonicScore; 
     output->isValid = true;
 
-    // store confidence metrics for smoothing (raw values, will be converted in utilities)
-    output->yinConfidence = bestYinValue;           // raw yin value (lower = better)
-    output->harmonicConfidence = bestHarmonicScore; // harmonic score (higher = better, 0-1)
-    // signalConfidence and overallConfidence calculated in utilities
+    // apply smoothing and confidence filtering
+    if (!applySmoothingToResult(output, input)) {
+        return false; // confidence too low
+    }
+
+    // convert smoothed frequency to note and cents (only once, after smoothing)
+    convertFrequencyToNote(output->frequency, output->noteName, sizeof(output->noteName));
+    output->centsOffset = calculateCentsOffset(output->frequency);
 
     output->yinEndTime = esp_timer_get_time();
     printTiming("yin end", output->bufferID, output->yinEndTime, output->captureTime);
+
 
     // periodic debug output
     static uint32_t debugCounter = 0;
@@ -571,6 +581,90 @@ bool yinAnalysis(const AudioBuffer* input, TuningResult* output, int hintedPerio
     }
 
     return output->validate();
+}
+
+// apply confidence-based ema smoothing to tuning result with note change detection
+bool applySmoothingToResult(TuningResult* result, const AudioBuffer* buffer) {
+    if (!result || !buffer || !result->validate()) {
+        return false;
+    }
+    
+    // update frequency history for stability calculation
+    smoothingState.recentFrequencies[smoothingState.frequencyIndex] = result->frequency;
+    smoothingState.frequencyIndex = (smoothingState.frequencyIndex + 1) % FREQUENCY_STABILITY_WINDOW;
+    if (smoothingState.validSamples < FREQUENCY_STABILITY_WINDOW) {
+        smoothingState.validSamples++;
+    }
+    
+    // calculate confidence metrics (using functions from utilities.cpp)
+    result->yinConfidence = calculateYinConfidence(result->yinConfidence);
+    result->signalConfidence = calculateSignalConfidence(buffer->rmsLevel);
+    result->overallConfidence = calculateOverallConfidence(result, buffer, &smoothingState);
+    
+    // check minimum confidence threshold
+    if (result->overallConfidence < MIN_CONFIDENCE_THRESHOLD) {
+        return false;
+    }
+    
+    // first measurement initialization
+    if (!smoothingState.initialized) {
+        smoothingState.smoothedFrequency = result->frequency;
+        smoothingState.initialized = true;
+        smoothingState.lastConfidence = result->overallConfidence;
+        smoothingState.lastUpdateTime = millis();
+        return true;
+    }
+    
+    // detect large frequency changes indicating note transitions
+    float frequencyDifference = fabsf(result->frequency - smoothingState.smoothedFrequency);
+    float relativeDifference = frequencyDifference / smoothingState.smoothedFrequency;
+    
+    // threshold set to ~6% frequency change (approximately one semitone)
+    // semitone ratio = 2^(1/12) ≈ 1.059, representing 5.9% frequency increase
+    const float NOTE_CHANGE_THRESHOLD = 0.06f;
+    
+    // handle note changes with immediate acquisition for faster convergence
+    if (relativeDifference > NOTE_CHANGE_THRESHOLD) {
+        safePrintf("note change detected: %.1f -> %.1f hz (%.1f%% change)\n", 
+                  smoothingState.smoothedFrequency, result->frequency, 
+                  relativeDifference * 100.0f);
+        
+        // reset smoothed frequency to new measurement for immediate acquisition
+        smoothingState.smoothedFrequency = result->frequency;
+        
+        // clear frequency history to prevent stability contamination from previous note
+        smoothingState.frequencyIndex = 0;
+        smoothingState.validSamples = 1;
+        smoothingState.recentFrequencies[0] = result->frequency;
+        for (int i = 1; i < FREQUENCY_STABILITY_WINDOW; i++) {
+            smoothingState.recentFrequencies[i] = 0.0f;
+        }
+        
+        // update result with new frequency
+        result->frequency = smoothingState.smoothedFrequency;
+        
+        // update state tracking
+        smoothingState.lastConfidence = result->overallConfidence;
+        smoothingState.lastUpdateTime = millis();
+        
+        return true; // bypass normal ema processing
+    }
+    
+    // calculate dynamic alpha based on confidence for normal ema smoothing
+    float alpha = calculateDynamicAlpha(result->overallConfidence);
+    
+    // apply exponential moving average to frequency
+    smoothingState.smoothedFrequency = (alpha * result->frequency) + 
+                                      ((1.0f - alpha) * smoothingState.smoothedFrequency);
+    
+    // update result with smoothed frequency
+    result->frequency = smoothingState.smoothedFrequency;
+    
+    // update state tracking
+    smoothingState.lastConfidence = result->overallConfidence;
+    smoothingState.lastUpdateTime = millis();
+    
+    return true;
 }
 
 // build array of absolute semitone values for a given scale and root

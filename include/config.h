@@ -8,8 +8,8 @@
 // DEBUGGING
 // =================================================================
 #define ENABLE_TIMING_DEBUG 0
-#define ENABLE_CONFIDENCE_DEBUG 1
-#define ENABLE_SERIAL_MONITOR_PRINT 1 
+#define ENABLE_CONFIDENCE_DEBUG 0
+#define ENABLE_SERIAL_MONITOR_PRINT 0
 #define SERIAL_BAUD_RATE 115200
 
 // =================================================================
@@ -93,8 +93,8 @@
 // =================================================================
 #define MIN_CONFIDENCE_THRESHOLD  0.15f  // minimum confidence for display update
 #define MIN_RMS_THRESHOLD        0.008f  // minimum signal level
-#define EMA_ALPHA_MIN            0.08f   // heavy smoothing for low confidence
-#define EMA_ALPHA_MAX            0.65f   // light smoothing for high confidence
+#define EMA_ALPHA_MIN            0.25f   // more smoothing for low confidence
+#define EMA_ALPHA_MAX            0.85f   // less smoothing for high confidence
 #define FREQUENCY_STABILITY_WINDOW 5     // samples for stability calculation
 #define A4_REFERENCE_PITCH       440.0f  // a4 = 440 hz
 
@@ -173,7 +173,7 @@
 #define CENTS_TEXT_POS_Y 97
 #define TEXT_CLEAR_AREA_X 75
 #define TEXT_CLEAR_AREA_Y 97
-#define TEXT_CLEAR_AREA_WIDTH 80
+#define TEXT_CLEAR_AREA_WIDTH 87
 #define TEXT_CLEAR_AREA_HEIGHT 44
 #define CENTS_UPDATE_THRESHOLD 2 // Cents change needed to trigger redraw
 
@@ -476,7 +476,6 @@ struct DisplayState {
     int lastDynamicRadius;
     uint32_t lastDynamicColor;
     bool staticCirclesDrawn;
-    SmoothingState smoothing;       // Temporal smoothing state
     PowerState powerState;          // Current power management state
     bool showingDetectingMode;      // Display state tracking
 };

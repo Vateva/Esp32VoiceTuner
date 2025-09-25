@@ -10,13 +10,14 @@ void calculateButterworthCoefficients(float cutoffHz, float sampleRate, bool isH
 float applyIIRFilter(float input, IIRFilter* filter);
 void applyPrefiltering(float* samples, uint16_t sampleCount);
 
-// audio capture and pitch analysis functions
+// audio capture and processing functions
 bool initI2S();
 bool captureRealAudio(AudioBuffer* buffer);
 int findCoarsePeriodYIN(const AudioBuffer* input, TuningResult* result);
 bool yinAnalysis(const AudioBuffer* input, TuningResult* output, int hintedPeriod);
 void convertFrequencyToNote(float frequency, char* noteName, size_t nameSize);
 int calculateCentsOffset(float frequency);
+bool applySmoothingToResult(TuningResult* result, const AudioBuffer* buffer);
 
 // scale-based note conversion functions
 void buildScaleNotes(int scaleType, int rootNote, int* scaleNotes, int* noteCount);

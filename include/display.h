@@ -25,7 +25,7 @@ void setDisplayBrightness(int brightnessPercent);  // brightness control functio
 void drawTunerInterface();
 void drawStaticTunerElements();
 void eraseDynamicCircle();
-void updateTunerDisplay(const char* note, int cents, TuningResult* result, bool hasAudio);
+void updateTunerDisplay(const char* note, int cents, const TuningResult* result, bool hasAudio);
 void drawOptimizedCentsCircle(int cents, uint16_t circleColor);
 void displayResult(const TuningResult* result, const AudioBuffer* buffer);
 void displayDetectingMode();
