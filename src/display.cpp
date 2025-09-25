@@ -1,5 +1,5 @@
 #include "display.h"
-#include "menu.h"      // add menu.h include for menu state checking
+#include "menu.h" // add menu.h include for menu state checking
 #include "utilities.h"
 
 // global display instance
@@ -52,27 +52,31 @@ LGFX::LGFX(void) {
 
 // set display brightness using pwm control on backlight pin
 void setDisplayBrightness(int brightnessPercent) {
-    // clamp brightness to valid range
-    if (brightnessPercent < 10) brightnessPercent = 10;
-    if (brightnessPercent > 100) brightnessPercent = 100;
-    
-    // setup pwm for backlight control
-    static bool pwmInitialized = false;
-    if (!pwmInitialized) {
-        // configure pwm channel for backlight
-        ledcSetup(PWM_CHANNEL, PWM_FREQUENCY, PWM_RESOLUTION); // PWM setup for backlight
-        ledcAttachPin(TFT_BLK, PWM_CHANNEL); // attach backlight pin to pwm channel
-        pwmInitialized = true;
-        safePrintf("pwm backlight control initialized\n");
-    }
-    
-    // convert percentage to 8-bit pwm value (0-255)
-    int pwmValue = (brightnessPercent * 255) / 100;
-    
-    // apply pwm to backlight pin
-    ledcWrite(PWM_CHANNEL, pwmValue);
-    
-    safePrintf("display brightness set to %d%% (pwm=%d)\n", brightnessPercent, pwmValue);
+  // clamp brightness to valid range
+  if (brightnessPercent < 10)
+    brightnessPercent = 10;
+  if (brightnessPercent > 100)
+    brightnessPercent = 100;
+
+  // setup pwm for backlight control
+  static bool pwmInitialized = false;
+  if (!pwmInitialized) {
+    // configure pwm channel for backlight
+    ledcSetup(PWM_CHANNEL, PWM_FREQUENCY,
+              PWM_RESOLUTION);           // PWM setup for backlight
+    ledcAttachPin(TFT_BLK, PWM_CHANNEL); // attach backlight pin to pwm channel
+    pwmInitialized = true;
+    safePrintf("pwm backlight control initialized\n");
+  }
+
+  // convert percentage to 8-bit pwm value (0-255)
+  int pwmValue = (brightnessPercent * 255) / 100;
+
+  // apply pwm to backlight pin
+  ledcWrite(PWM_CHANNEL, pwmValue);
+
+  safePrintf("display brightness set to %d%% (pwm=%d)\n", brightnessPercent,
+             pwmValue);
 }
 
 // hardware initialization and test sequence
@@ -87,9 +91,7 @@ void initDisplay() {
 }
 
 // check if menu system is active and should block tuner display updates
-bool isMenuActive() {
-  return (menuSystem.currentMode != MENU_HIDDEN);
-}
+bool isMenuActive() { return (menuSystem.currentMode != MENU_HIDDEN); }
 
 // draw static reference circles and labels
 void drawStaticTunerElements() {
@@ -97,16 +99,16 @@ void drawStaticTunerElements() {
   if (isMenuActive()) {
     return;
   }
-  
+
   if (displayState.staticCirclesDrawn) {
     return;
   }
   char tempStr[20];
-  
+
   // use runtime parameter for threshold values instead of constants
   int centsOverThreshold = tunerParams.flatSharpThreshold;
   int centsUnderThreshold = -tunerParams.flatSharpThreshold;
-  
+
   // outer circle (+cents threshold)
   tft.drawCircle(DISPLAY_CENTER_X, DISPLAY_CENTER_Y, DISPLAY_OUTER_RADIUS,
                  TFT_WHITE);
@@ -142,17 +144,17 @@ void eraseDynamicCircle() {
   if (isMenuActive()) {
     return;
   }
-  
+
   // erase previous dynamic circle
   tft.drawCircle(DISPLAY_CENTER_X, DISPLAY_CENTER_Y,
                  displayState.lastDynamicRadius, TFT_BLACK);
-  
+
   // redraw middle reference circle
   tft.drawCircle(DISPLAY_CENTER_X, DISPLAY_CENTER_Y, DISPLAY_MIDDLE_RADIUS,
                  TFT_DARKGREY);
 
   tft.setTextSize(1);
-  
+
   char tempStr[20];
 
   // use runtime parameters for threshold values
@@ -181,69 +183,81 @@ void drawOptimizedCentsCircle(int cents, uint16_t circleColor) {
   if (isMenuActive()) {
     return;
   }
-  
+
   int newRadius;
-  
+
   // use runtime parameters for threshold calculations
   int centsOverThreshold = tunerParams.flatSharpThreshold;
   int centsUnderThreshold = -tunerParams.flatSharpThreshold;
-  
+
   // calculate scaling factors based on runtime threshold configuration
-  float lowerScale = (float)(DISPLAY_MIDDLE_RADIUS - DISPLAY_INNER_RADIUS) / abs(centsUnderThreshold);
-  float upperScale = (float)(DISPLAY_OUTER_RADIUS - DISPLAY_MIDDLE_RADIUS) / centsOverThreshold;
-  
+  float lowerScale = (float)(DISPLAY_MIDDLE_RADIUS - DISPLAY_INNER_RADIUS) /
+                     abs(centsUnderThreshold);
+  float upperScale = (float)(DISPLAY_OUTER_RADIUS - DISPLAY_MIDDLE_RADIUS) /
+                     centsOverThreshold;
+
   // map cents to radius across four zones
   if (cents < centsUnderThreshold) {
     // zone 1: extreme flat (shrink inward from inner circle)
     float extraCents = abs(cents) - abs(centsUnderThreshold);
-    newRadius = DISPLAY_INNER_RADIUS - (int)(extraCents * DYNAMIC_CIRCLE_EXTREME_SCALE);
-    
+    newRadius =
+        DISPLAY_INNER_RADIUS - (int)(extraCents * DYNAMIC_CIRCLE_EXTREME_SCALE);
+
     // clamp minimum radius
     if (newRadius < (DISPLAY_INNER_RADIUS - DYNAMIC_CIRCLE_MIN_RADIUS_OFFSET)) {
       newRadius = DISPLAY_INNER_RADIUS - DYNAMIC_CIRCLE_MIN_RADIUS_OFFSET;
     }
-  } 
-  else if (cents < 0) {
+  } else if (cents < 0) {
     // zone 2: moderate flat (between inner and middle)
     newRadius = DISPLAY_MIDDLE_RADIUS + (int)(cents * lowerScale);
-  } 
-  else if (cents <= centsOverThreshold) {
+  } else if (cents <= centsOverThreshold) {
     // zone 3: moderate sharp (between middle and outer)
     newRadius = DISPLAY_MIDDLE_RADIUS + (int)(cents * upperScale);
-  } 
-  else {
+  } else {
     // zone 4: extreme sharp (grow outward from outer circle)
     float extraCents = cents - centsOverThreshold;
-    newRadius = DISPLAY_OUTER_RADIUS + (int)(extraCents * DYNAMIC_CIRCLE_EXTREME_SCALE);
-    
+    newRadius =
+        DISPLAY_OUTER_RADIUS + (int)(extraCents * DYNAMIC_CIRCLE_EXTREME_SCALE);
+
     // clamp maximum radius
     if (newRadius > (DISPLAY_OUTER_RADIUS + DYNAMIC_CIRCLE_MAX_RADIUS_OFFSET)) {
       newRadius = DISPLAY_OUTER_RADIUS + DYNAMIC_CIRCLE_MAX_RADIUS_OFFSET;
     }
   }
-  
+
   // avoid collision with static reference circles
-  if (newRadius >= (DISPLAY_INNER_RADIUS - DYNAMIC_CIRCLE_COLLISION_BUFFER) && newRadius <= (DISPLAY_INNER_RADIUS + DYNAMIC_CIRCLE_COLLISION_BUFFER)) {
-    newRadius = (cents < centsUnderThreshold) ? (DISPLAY_INNER_RADIUS - DYNAMIC_CIRCLE_COLLISION_BUFFER) : (DISPLAY_INNER_RADIUS + DYNAMIC_CIRCLE_COLLISION_BUFFER);
-  } 
-  else if (newRadius >= (DISPLAY_OUTER_RADIUS - DYNAMIC_CIRCLE_COLLISION_BUFFER) && newRadius <= (DISPLAY_OUTER_RADIUS + DYNAMIC_CIRCLE_COLLISION_BUFFER)) {
-    newRadius = (cents < centsOverThreshold) ? (DISPLAY_OUTER_RADIUS - DYNAMIC_CIRCLE_COLLISION_BUFFER) : (DISPLAY_OUTER_RADIUS + DYNAMIC_CIRCLE_COLLISION_BUFFER);
+  if (newRadius >= (DISPLAY_INNER_RADIUS - DYNAMIC_CIRCLE_COLLISION_BUFFER) &&
+      newRadius <= (DISPLAY_INNER_RADIUS + DYNAMIC_CIRCLE_COLLISION_BUFFER)) {
+    newRadius = (cents < centsUnderThreshold)
+                    ? (DISPLAY_INNER_RADIUS - DYNAMIC_CIRCLE_COLLISION_BUFFER)
+                    : (DISPLAY_INNER_RADIUS + DYNAMIC_CIRCLE_COLLISION_BUFFER);
+  } else if (newRadius >=
+                 (DISPLAY_OUTER_RADIUS - DYNAMIC_CIRCLE_COLLISION_BUFFER) &&
+             newRadius <=
+                 (DISPLAY_OUTER_RADIUS + DYNAMIC_CIRCLE_COLLISION_BUFFER)) {
+    newRadius = (cents < centsOverThreshold)
+                    ? (DISPLAY_OUTER_RADIUS - DYNAMIC_CIRCLE_COLLISION_BUFFER)
+                    : (DISPLAY_OUTER_RADIUS + DYNAMIC_CIRCLE_COLLISION_BUFFER);
+  } else if (newRadius >=
+                 (DISPLAY_MIDDLE_RADIUS - DYNAMIC_CIRCLE_COLLISION_BUFFER) &&
+             newRadius <=
+                 (DISPLAY_MIDDLE_RADIUS + DYNAMIC_CIRCLE_COLLISION_BUFFER)) {
+    newRadius = (cents < 0)
+                    ? (DISPLAY_MIDDLE_RADIUS - DYNAMIC_CIRCLE_COLLISION_BUFFER)
+                    : (DISPLAY_MIDDLE_RADIUS + DYNAMIC_CIRCLE_COLLISION_BUFFER);
   }
-  else if (newRadius >= (DISPLAY_MIDDLE_RADIUS - DYNAMIC_CIRCLE_COLLISION_BUFFER) && newRadius <= (DISPLAY_MIDDLE_RADIUS + DYNAMIC_CIRCLE_COLLISION_BUFFER)) {
-    newRadius = (cents < 0) ? (DISPLAY_MIDDLE_RADIUS - DYNAMIC_CIRCLE_COLLISION_BUFFER) : (DISPLAY_MIDDLE_RADIUS + DYNAMIC_CIRCLE_COLLISION_BUFFER);
-  }
-  
+
   // erase previous circle if radius changed
   if (displayState.lastDynamicRadius > 0 &&
       displayState.lastDynamicRadius != newRadius) {
     eraseDynamicCircle();
   }
-  
+
   // draw new circle if different from previous
   if (newRadius != displayState.lastDynamicRadius ||
       circleColor != displayState.lastDynamicColor) {
     tft.drawCircle(DISPLAY_CENTER_X, DISPLAY_CENTER_Y, newRadius, circleColor);
-    
+
     // update state tracking
     displayState.lastDynamicRadius = newRadius;
     displayState.lastDynamicColor = circleColor;
@@ -257,60 +271,97 @@ void drawTunerInterface() {
     safePrintf("skipping tuner interface draw - menu is active\n");
     return;
   }
-  
+
   tft.fillScreen(TFT_BLACK);
   displayState.staticCirclesDrawn = false;
   displayState.lastDynamicRadius = 0;
   displayState.needsFullRedraw = false;
   displayState.showingDetectingMode = false;
-  
-  
+
   drawStaticTunerElements();
 }
 
-// display detecting mode with power saving indication
+// display detecting mode with slow zzz sleep animation
 void displayDetectingMode() {
   // abort if menu is active - menu has display priority
   if (isMenuActive()) {
     return;
   }
-  
-  if (displayState.showingDetectingMode && 
-      displayState.powerState == currentPowerState) {
-    return; // already showing detecting mode
-  }
-  
+
   // acquire display mutex with timeout
   if (xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-    // clear center area
-    tft.fillRect(85, 85, 70, 70, TFT_BLACK);
-    
-    // erase any dynamic circle
-    if (displayState.lastDynamicRadius > 0) {
-      eraseDynamicCircle();
-      displayState.lastDynamicRadius = 0;
-    }
-    
-    // show detecting mode text
-    tft.setTextColor(TFT_CYAN);
-    tft.setTextSize(2);
-    tft.drawCenterString("READY", 120, 100);
-    
-    tft.setTextSize(1);
-    tft.setTextColor(TFT_DARKGREY);
-    tft.drawCenterString("listening...", 120, 125);
 
-    // show power saving indicator
-    tft.setTextColor(TFT_GREEN);
-    char cpuStr[16];
-    sprintf(cpuStr, "%d MHz", getCpuFrequencyMhz());
-    tft.drawCenterString(cpuStr, 120, 140);
-    
-    // update state tracking
-    displayState.showingDetectingMode = true;
-    displayState.powerState = currentPowerState;
-    displayState.lastNoteName[0] = '\0'; // force refresh when switching back
-    
+    // slow animation timing - 1.3fps (750ms per frame)
+    uint32_t currentTime = millis();
+    uint32_t animationFrame = (currentTime / 750) % 24; // 24 frames total, 18 second cycle
+
+    // only redraw if animation frame changed to prevent flickering
+    static uint32_t lastAnimationFrame = 0xFFFFFFFF; // initialize to invalid value
+    if (animationFrame != lastAnimationFrame) {
+      lastAnimationFrame = animationFrame;
+
+      // clear entire screen to black for clean sleep display
+      tft.fillScreen(TFT_BLACK);
+
+      // erase any dynamic circle state tracking
+      if (displayState.lastDynamicRadius > 0) {
+        displayState.lastDynamicRadius = 0;
+      }
+
+      // animation parameters for z character lifecycle
+      const int baseY = 155;        // starting y position at bottom
+      const int riseDistance = 100; // total upward travel distance
+      const int zLifetime = 8;      // frames each z is visible (6 seconds)
+      const int zDelay = 5;         // frames between z appearances (3.75 seconds)
+
+      // discrete frame positions and sizes for smooth stepped animation
+      const int frameY[] = {0, -10, -25, -40, -60, -75, -90, -100}; // upward positions
+      const int frameSize[] = {1, 2, 3, 4, 5, 4, 3, 2}; // text size progression
+      const uint16_t frameColors[] = {
+          // color fade progression from dark to bright to dark
+          TFT_DARKGREY, TFT_LIGHTGRAY, TFT_PINK, TFT_PINK,
+          TFT_PINK, TFT_LIGHTGRAY, TFT_DARKGREY, TFT_DARKGREY};
+
+      // draw up to 5 z characters at different animation stages
+      for (int zIndex = 0; zIndex < 5; zIndex++) {
+        // calculate this z's frame within its lifecycle with wraparound
+        int zFrame = animationFrame - (zIndex * zDelay);
+        if (zFrame < 0) zFrame += 24; // handle negative wraparound
+
+        // skip z if outside its visible lifetime
+        if (zFrame < 0 || zFrame >= zLifetime) continue;
+
+        // apply discrete frame values without interpolation
+        int yPos = baseY + frameY[zFrame];
+        int textSize = frameSize[zFrame];
+        uint16_t color = frameColors[zFrame];
+
+        // subtle horizontal drift for natural floating effect
+        int xOffset = 0;
+        if (zFrame == 2 || zFrame == 6) xOffset = 1;
+        if (zFrame == 4) xOffset = -1;
+
+        int xPos = 120 + (zIndex - 2) * 10 + xOffset;
+
+        // draw z character with calculated parameters
+        tft.setTextSize(textSize);
+        tft.setTextColor(color);
+        tft.drawCenterString("z", xPos, yPos);
+      }
+
+      // draw status text at bottom of screen
+      tft.setTextSize(1);
+      tft.setTextColor(TFT_PINK);
+      tft.drawCenterString("Asleep", 120, 204);
+      tft.drawCenterString("but", 120, 212);
+      tft.drawCenterString("listening...", 120, 220);
+
+      // update state tracking for display management
+      displayState.showingDetectingMode = true;
+      displayState.powerState = currentPowerState;
+      displayState.lastNoteName[0] = '\0'; // force refresh when switching back
+    }
+
     xSemaphoreGive(displayMutex);
   }
 }
@@ -327,10 +378,9 @@ void updateTunerDisplay(const char *note, int cents, const TuningResult *result,
     }
     return;
   }
-  
+
   if (!displayMutex)
     return;
-
 
   // acquire display mutex with timeout
   if (xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
@@ -339,28 +389,31 @@ void updateTunerDisplay(const char *note, int cents, const TuningResult *result,
       xSemaphoreGive(displayMutex);
       return;
     }
-    
+
     // ensure we are not in detecting mode display
     if (displayState.showingDetectingMode) {
       drawTunerInterface(); // redraw full interface
       displayState.showingDetectingMode = false;
     }
-    
+
     drawStaticTunerElements();
 
     // use runtime parameters for color thresholds
     int flatSharpThreshold = tunerParams.flatSharpThreshold;
-    
+
     // determine color based on pitch accuracy using runtime parameters
     uint16_t noteColor;
 
     if (abs(cents) <= flatSharpThreshold) {
-      noteColor = TFT_GREEN; 
-    } else if (abs(cents) <= flatSharpThreshold + CENTS_COLOR_THRESHOLD_GREENYELLOW) {
+      noteColor = TFT_GREEN;
+    } else if (abs(cents) <=
+               flatSharpThreshold + CENTS_COLOR_THRESHOLD_GREENYELLOW) {
       noteColor = TFT_GREENYELLOW;
-    } else if (abs(cents) <= flatSharpThreshold + CENTS_COLOR_THRESHOLD_YELLOW) {
+    } else if (abs(cents) <=
+               flatSharpThreshold + CENTS_COLOR_THRESHOLD_YELLOW) {
       noteColor = TFT_YELLOW;
-    } else if (abs(cents) <= flatSharpThreshold + CENTS_COLOR_THRESHOLD_ORANGE) {
+    } else if (abs(cents) <=
+               flatSharpThreshold + CENTS_COLOR_THRESHOLD_ORANGE) {
       noteColor = TFT_ORANGE;
     } else {
       noteColor = TFT_RED;
@@ -371,7 +424,8 @@ void updateTunerDisplay(const char *note, int cents, const TuningResult *result,
         abs(cents - displayState.lastCentsOffset) >= 1) {
 
       // clear text area efficiently
-      tft.fillRect(TEXT_CLEAR_AREA_X, TEXT_CLEAR_AREA_Y, TEXT_CLEAR_AREA_WIDTH, TEXT_CLEAR_AREA_HEIGHT, TFT_BLACK);
+      tft.fillRect(TEXT_CLEAR_AREA_X, TEXT_CLEAR_AREA_Y, TEXT_CLEAR_AREA_WIDTH,
+                   TEXT_CLEAR_AREA_HEIGHT, TFT_BLACK);
 
       // draw cents value ONLY if showCents parameter is enabled
       if (tunerParams.showCents) {
@@ -385,7 +439,9 @@ void updateTunerDisplay(const char *note, int cents, const TuningResult *result,
       // draw note name
       tft.setTextSize(3);
       tft.setTextColor(noteColor);
-      tft.drawCenterString(note, NOTE_TEXT_POS_X, (tunerParams.showCents)? NOTE_TEXT_POS_Y : (NOTE_TEXT_POS_Y - 10) );
+      tft.drawCenterString(note, NOTE_TEXT_POS_X,
+                           (tunerParams.showCents) ? NOTE_TEXT_POS_Y
+                                                   : (NOTE_TEXT_POS_Y - 10));
 
       // update state tracking
       strcpy(displayState.lastNoteName, note);
@@ -413,7 +469,7 @@ void displayResult(const TuningResult *result, const AudioBuffer *buffer) {
   if (isMenuActive()) {
     return;
   }
-  
+
   // handle invalid result
   if (!result || !result->validate()) {
     if (displayState.lastNoteName[0] != '\0') {
@@ -434,7 +490,8 @@ void displayResult(const TuningResult *result, const AudioBuffer *buffer) {
     needsUpdate = true;
   }
 
-  if (abs(result->centsOffset - displayState.lastCentsOffset) > CENTS_UPDATE_THRESHOLD) {
+  if (abs(result->centsOffset - displayState.lastCentsOffset) >
+      CENTS_UPDATE_THRESHOLD) {
     needsUpdate = true;
   }
 
@@ -446,5 +503,4 @@ void displayResult(const TuningResult *result, const AudioBuffer *buffer) {
     strcpy(displayState.lastNoteName, result->noteName);
     displayState.lastCentsOffset = result->centsOffset;
   }
-
 }
