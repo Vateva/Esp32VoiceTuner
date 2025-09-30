@@ -59,7 +59,6 @@ Parameter createBoolParam(bool* valuePtr, const char* trueText, const char* fals
 // tuning parameters submenu
 MenuItem tuningSubmenu[] = {
     MenuItem("Flat/Sharp Threshold", createIntRangeParam(&tunerParams.flatSharpThreshold, 10, 25, 1, "c")),
-    MenuItem("YIN Search Window", createIntRangeParam(&tunerParams.yinSearchWindow, 20, 40, 5, "%")),
     MenuItem("Smoothing Level", createIntRangeParam(&tunerParams.smoothingLevel, 1, 5, 1, "")),
     MenuItem("Scale Type", createIntRangeParam(&tunerParams.scaleType, 0, SCALE_COUNT-1, 1, "")),
     MenuItem("Root Note", createIntRangeParam(&tunerParams.rootNote, 0, NOTE_COUNT-1, 1, "")),
@@ -84,6 +83,7 @@ MenuItem displaySubmenu[] = {
 // system submenu
 MenuItem systemSubmenu[] = {
     MenuItem("Silence Timeout", createIntRangeParam(&tunerParams.silenceTimeout, 2, 10, 1, "s")),
+    MenuItem("YIN Search Window", createIntRangeParam(&tunerParams.yinSearchWindow, 20, 40, 5, "%")),
     MenuItem("DB Activation", createIntRangeParam(&tunerParams.dbActivation, -25, -10, 1, "dB")),
     MenuItem("DB Deactivation", createIntRangeParam(&tunerParams.dbDeactivation, -40, -20, 1, "dB")),
     MenuItem("Menu Timeout", createIntRangeParam(&tunerParams.menuTimeout, 2, 10, 1, "s")),
@@ -92,10 +92,10 @@ MenuItem systemSubmenu[] = {
 
 // main menu structure (references submenus defined above)
 MenuItem mainMenu[] = {
-    MenuItem("Tuning Parameters", tuningSubmenu, 6),
+    MenuItem("Tuning Parameters", tuningSubmenu, 5),
     MenuItem("Audio Prefiltering", audioSubmenu, 3),
     MenuItem("Display", displaySubmenu, 4),
-    MenuItem("System", systemSubmenu, 5),
+    MenuItem("System", systemSubmenu, 6),
     MenuItem("Exit", menuActionExit)
 };
 
@@ -474,8 +474,19 @@ void drawMenuItem(int index, bool isSelected, const char* text, int yPosition, M
         formatParameterValue(item->parameter, valueBuffer, sizeof(valueBuffer));
         
         tft.setTextColor(isSelected ? TFT_YELLOW : TFT_DARKGREY);
-        // position parameter values on right side with proper spacing
-        tft.drawString(valueBuffer, 180, yPosition);
+        
+        // center-align scale names around x=141
+        if (item->parameter.type == PARAM_INT_RANGE && 
+            item->parameter.intRange.valuePtr == &tunerParams.scaleType) {
+            // calculate text width (6 pixels per character at text size 1)
+            int textWidth = strlen(valueBuffer) * 6;
+            // center the text around x=141
+            int xPosition = 180 - (textWidth / 2);
+            tft.drawString(valueBuffer, xPosition, yPosition);
+        } else {
+            // all other parameters use normal left-aligned position
+            tft.drawString(valueBuffer, 180, yPosition);
+        }
     }
 }
 

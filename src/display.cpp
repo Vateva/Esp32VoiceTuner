@@ -90,6 +90,64 @@ void initDisplay() {
   drawTunerInterface();
 }
 
+// startup animation function - add to display.cpp
+void startupAnimation() {
+    String text = "Voice tuner";  // text to display
+    int textLength = text.length();  // get total character count (11 characters)
+    
+    // font size 4 calculations
+    int fontSize = 3;
+    int charWidth = 6 * fontSize;   // each character is 6 pixels wide * scale factor = 24px
+    int charHeight = 8 * fontSize;  // each character is 8 pixels high * scale factor = 32px
+    
+    // calculate total text width and positioning
+    int totalTextWidth = textLength * charWidth;  // total width = 11 * 24 = 264 pixels
+    
+    // center the text on 240x240 display
+    // note: text might extend slightly beyond edges since 264px > 240px
+    int startX = (240 - totalTextWidth) / 2;  // horizontal center (will be negative)
+    int startY = (240 - charHeight) / 2;      // vertical center = (240-32)/2 = 104
+    
+    // if text is too wide, adjust start position to keep it readable
+    if (startX < 0) {
+        startX = 8;  // small margin from left edge
+    }
+    
+    safePrintf("starting letter-by-letter animation...\n");
+    
+    // clear screen to black background
+    tft.fillScreen(TFT_BLACK);
+    
+    // set text properties
+    tft.setTextColor(TFT_PINK);   // pink text on black background
+    tft.setTextSize(fontSize);     // set font size to 4
+    
+    // loop through each character and display progressively
+    for (int i = 0; i < textLength; i++) {
+        // calculate current character position
+        int currentX = startX + (i * charWidth);
+        int currentY = startY;
+        
+        // move cursor to current character position
+        tft.setCursor(currentX, currentY);
+        
+        // print only the current character
+        tft.print(text.charAt(i));
+        
+        // debug info to serial monitor
+        safePrintf("displaying character: '%c' at position (%d, %d)\n", 
+                  text.charAt(i), currentX, currentY);
+        
+        // wait 50 milliseconds before showing next character
+        delay(100);
+    }
+    
+    safePrintf("startup animation complete!\n");
+    
+    // pause for 2 seconds to show complete text before continuing
+    delay(2000);
+}
+
 // check if menu system is active and should block tuner display updates
 bool isMenuActive() { return (menuSystem.currentMode != MENU_HIDDEN); }
 

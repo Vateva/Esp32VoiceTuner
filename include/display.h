@@ -29,5 +29,6 @@ void updateTunerDisplay(const char* note, int cents, const TuningResult* result,
 void drawOptimizedCentsCircle(int cents, uint16_t circleColor);
 void displayResult(const TuningResult* result, const AudioBuffer* buffer);
 void displayDetectingMode();
+void startupAnimation();
 
 #endif // DISPLAY_H

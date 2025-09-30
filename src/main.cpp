@@ -35,6 +35,9 @@ void setup() {
 
   // display hardware setup
   initDisplay();
+    
+  startupAnimation();
+
   // menu system early initialization (gpio setup)
   safePrintf("initializing menu system...\n");
   // note: full menu initialization happens in processing task

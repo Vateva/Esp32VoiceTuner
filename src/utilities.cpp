@@ -348,3 +348,4 @@ float calculateDynamicAlpha(float confidence) {
     
     return alpha;
 }
+
