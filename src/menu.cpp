@@ -69,6 +69,7 @@ MenuItem tuningSubmenu[] = {
 MenuItem audioSubmenu[] = {
     MenuItem("Highpass Cutoff", createIntRangeParam(&tunerParams.highpassCutoff, 60, 120, 10, "Hz")),
     MenuItem("Lowpass Cutoff", createIntRangeParam(&tunerParams.lowpassCutoff, 4000, 8000, 500, "Hz")),
+    MenuItem("Audio Gain", createFloatRangeParam(&tunerParams.audioGain, 1.0f, 10.0f, 0.2f, "x")),
     MenuItem("Back", nullptr)
 };
 
@@ -84,18 +85,17 @@ MenuItem displaySubmenu[] = {
 MenuItem systemSubmenu[] = {
     MenuItem("Silence Timeout", createIntRangeParam(&tunerParams.silenceTimeout, 2, 10, 1, "s")),
     MenuItem("YIN Search Window", createIntRangeParam(&tunerParams.yinSearchWindow, 20, 40, 5, "%")),
-    MenuItem("DB Activation", createIntRangeParam(&tunerParams.dbActivation, -25, -10, 1, "dB")),
-    MenuItem("DB Deactivation", createIntRangeParam(&tunerParams.dbDeactivation, -40, -20, 1, "dB")),
     MenuItem("Menu Timeout", createIntRangeParam(&tunerParams.menuTimeout, 2, 10, 1, "s")),
+    MenuItem("Factory Reset", factoryResetParameters),
     MenuItem("Back", nullptr)
 };
 
 // main menu structure (references submenus defined above)
 MenuItem mainMenu[] = {
     MenuItem("Tuning Parameters", tuningSubmenu, 5),
-    MenuItem("Audio Prefiltering", audioSubmenu, 3),
+    MenuItem("Audio Prefiltering", audioSubmenu, 4),
     MenuItem("Display", displaySubmenu, 4),
-    MenuItem("System", systemSubmenu, 6),
+    MenuItem("System", systemSubmenu, 5),
     MenuItem("Exit", menuActionExit)
 };
 
@@ -590,6 +590,7 @@ void applyParameterChanges() {
     // audio prefiltering - recalculate filter coefficients
     safePrintf("  highpass cutoff: %dHz\n", tunerParams.highpassCutoff);
     safePrintf("  lowpass cutoff: %dHz\n", tunerParams.lowpassCutoff);
+    safePrintf("  audio gain: %.1fx\n", tunerParams.audioGain);
     recalculateAudioFilters();
     
     // system parameters - these are used directly by checking tunerParams
@@ -627,6 +628,7 @@ void saveParametersToFlash() {
     // audio prefiltering
     preferences.putInt("hpCutoff", tunerParams.highpassCutoff);
     preferences.putInt("lpCutoff", tunerParams.lowpassCutoff);
+    preferences.putFloat("audioGain", tunerParams.audioGain);
     
     // display settings
     preferences.putInt("brightness", tunerParams.brightness);
@@ -662,6 +664,7 @@ void loadParametersFromFlash() {
 
     tunerParams.highpassCutoff = preferences.getInt("hpCutoff", tunerParams.highpassCutoff);
     tunerParams.lowpassCutoff = preferences.getInt("lpCutoff", tunerParams.lowpassCutoff);
+    tunerParams.audioGain = preferences.getFloat("audioGain", tunerParams.audioGain);
     
     tunerParams.brightness = preferences.getInt("brightness", tunerParams.brightness);
     tunerParams.showCents = preferences.getBool("showCents", tunerParams.showCents);
@@ -721,6 +724,10 @@ bool validateParameterRanges() {
         tunerParams.lowpassCutoff = 6000;
         valid = false;
     }
+    if (tunerParams.audioGain < 1.0f || tunerParams.audioGain > 10.0f) {
+        tunerParams.audioGain = 3.0f;
+        valid = false;
+    }
     
     // check display parameters
     if (tunerParams.brightness < 10 || tunerParams.brightness > 100) {
@@ -757,6 +764,17 @@ bool validateParameterRanges() {
 void factoryResetParameters() {
     safePrintf("performing factory reset of all parameters\n");
     
+    // show feedback on display if possible
+    if (xSemaphoreTake(displayMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        tft.fillScreen(TFT_BLACK);
+        tft.setTextColor(TFT_YELLOW);
+        tft.setTextSize(2);
+        tft.drawCenterString("Factory", 120, 100);
+        tft.drawCenterString("Reset", 120, 120);
+        xSemaphoreGive(displayMutex);
+        delay(1000);  // brief pause so user sees the message
+    }
+    
     // reset to constructor defaults
     tunerParams = TunerParameters();
     
@@ -767,6 +785,9 @@ void factoryResetParameters() {
     applyParameterChanges();
     
     safePrintf("factory reset complete - all parameters restored to defaults\n");
+
+    // exit menu and return to tuner interface
+    exitMenuSystem();
 }
 
 // setup menu structure with main menu and submenus

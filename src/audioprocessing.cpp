@@ -208,7 +208,7 @@ bool captureRealAudio(AudioBuffer* buffer) {
     // convert 24-bit to normalized float with gain
     for (uint16_t i = 0; i < buffer->sampleCount; i++) {
         int32_t sample24 = rawSamples[i] >> 8;
-        buffer->samples[i] = (float)sample24 / INT24_TO_FLOAT_DIVISOR * AUDIO_GAIN_FACTOR;
+        buffer->samples[i] = (float)sample24 / INT24_TO_FLOAT_DIVISOR * tunerParams.audioGain;
     }
     
     free(rawSamples);

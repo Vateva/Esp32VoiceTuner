@@ -1,5 +1,6 @@
 #include "utilities.h"
 #include "menu.h"  // add menu.h to access tunerParams
+#include "display.h"
 #include <stdarg.h>
 #include <cmath>
 
@@ -155,7 +156,7 @@ void updatePowerState(float dbLevel) {
     }
 }
 
-// change cpu frequency and update power state
+// change cpu frequency and update power state (no display changes here)
 void switchToPowerState(PowerState newState) {
     if (newState == currentPowerState) return;
     
@@ -171,7 +172,7 @@ void switchToPowerState(PowerState newState) {
         safePrintf("POWER: analyzing mode - cpu %d mhz\n", ANALYZING_CPU_FREQ);
     }
     
-    // reset silence timer when switching to analyzing (use runtime parameter)
+    // reset silence timer when switching to analyzing
     if (newState == ANALYZING) {
         silenceTimer = tunerParams.silenceTimeout * 1000;
         lastSoundTime = millis();

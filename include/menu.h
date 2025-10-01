@@ -90,7 +90,6 @@ struct MenuItem {
 struct TunerParameters {
     // tuning parameters
     int flatSharpThreshold;      // ±cents threshold (10-25)
-    int yinSearchWindow;         // yin search window percentage (20-40)
     int smoothingLevel;          // smoothing level (1-5)
     int scaleType;               // ScaleType enum value (0-9)
     int rootNote;                // ChromaticNote enum value (0-11)
@@ -98,27 +97,31 @@ struct TunerParameters {
     // audio prefiltering
     int highpassCutoff;          // highpass cutoff hz (60-120)
     int lowpassCutoff;           // lowpass cutoff hz (4000-8000)
+    float audioGain;             // audio input gain multiplier (1.0-10.0)
     
     // display
     int brightness;              // brightness percentage (10-100)
     bool showCents;              // show numerical cents value
     int noteNaming;              // NoteNamingSystem enum value (0-1)
+
     // system
     int silenceTimeout;          // silence timeout seconds (2-10)
     int dbActivation;            // db activation threshold (-10 to -25)
     int dbDeactivation;          // db deactivation threshold (-20 to -40)
     int menuTimeout;             // menu timeout seconds (2-10)
+    int yinSearchWindow;         // yin search window percentage (20-40)
     
     TunerParameters() {
         // initialize with current config.h values
         flatSharpThreshold = 15;  // default ±15 cents
-        yinSearchWindow = 40;     // default 40% from YIN_SEARCH_WINDOW
+        
         smoothingLevel = 3;       // middle smoothing level
         scaleType = 0;            // SCALE_CHROMATIC (maintain current behavior)
         rootNote = 0;             // NOTE_C (c major/c minor scales)
 
         highpassCutoff = 60;      // from HIGHPASS_CUTOFF_HZ
         lowpassCutoff = 6000;     // from LOWPASS_CUTOFF_HZ
+        audioGain = 3.0f;         // from AUDIO_GAIN_FACTOR
         
         brightness = 100;         // full brightness
         showCents = true;         // show cents by default
@@ -128,6 +131,7 @@ struct TunerParameters {
         dbActivation = -15;       // from DB_ACTIVATION_THRESHOLD
         dbDeactivation = -25;     // from DB_DEACTIVATION_THRESHOLD  
         menuTimeout = 10;         // from MENU_TIMEOUT_MS / 1000
+        yinSearchWindow = 40;     // default 40% from YIN_SEARCH_WINDOW
     }
 };
 
@@ -199,6 +203,9 @@ void menuActionExit();
 // parameter application functions
 void applyDisplayChanges();
 void applyParameterChanges();
+
+// factory reset all parameters to defaults and save
+void factoryResetParameters();
 
 // menu structure initialization
 void setupMenuStructure();

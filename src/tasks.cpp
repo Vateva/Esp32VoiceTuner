@@ -200,14 +200,26 @@ void processingAndDisplayTask(void* parameter) {
                 printTiming("detecting mode skip", result.bufferID, result.yinEndTime, result.captureTime);
             }
             
-            // display state management (but not if menu is active)
-            if (!analysisSuccess && menuSystem.currentMode == MENU_HIDDEN) {
-                if (currentPowerState == DETECTING) {
-                    // show detecting mode display
-                    displayDetectingMode();
-                } else {
-                    // show no-signal state in analyzing mode
-                    displayResult(nullptr, inputBuffer);
+            // display state management - handle mode transitions (but not if menu is active)
+            if (menuSystem.currentMode == MENU_HIDDEN) {
+                // track power state changes to trigger display transitions
+                static PowerState lastDisplayedState = ANALYZING;
+                
+                if (currentPowerState != lastDisplayedState) {
+                    // power state changed - update display accordingly
+                    if (currentPowerState == DETECTING) {
+                        displayDetectingMode();
+                    } else {
+                        drawTunerInterface();
+                    }
+                    lastDisplayedState = currentPowerState;
+                } else if (!analysisSuccess) {
+                    // no state change, but handle ongoing states
+                    if (currentPowerState == DETECTING) {
+                        displayDetectingMode(); // continue animation updates
+                    } else {
+                        displayResult(nullptr, inputBuffer); // show no-signal in analyzing
+                    }
                 }
             }
             
@@ -224,7 +236,7 @@ void processingAndDisplayTask(void* parameter) {
                 checkButtonsAndUpdateMenu();
                 lastButtonCheck = now;
                 
-                // optional: brief yield to ensure smooth operation
+                // brief yield
                 vTaskDelay(pdMS_TO_TICKS(1));
             }
         }

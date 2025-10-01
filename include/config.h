@@ -40,11 +40,11 @@
 #define AUDIO_BUFFER_SAMPLES 2048
 
 // audio prefiltering
-#define HIGHPASS_CUTOFF_HZ    60.0f    // remove dc offset and low frequency noise
-#define LOWPASS_CUTOFF_HZ   6000.0f    // remove high frequency noise above harmonics
+#define HIGHPASS_CUTOFF_HZ    60.0f    // default frecuency to remove dc offset and low frequency noise, configurable runtime parameter
+#define LOWPASS_CUTOFF_HZ   6000.0f    // default frecuency to remove high frequency noise above harmonics, configurable runtime parameter
+#define AUDIO_GAIN_FACTOR     3.0f     // default audio input gain multiplier, configurable runtime parameter
 
 // audio processing constants
-#define AUDIO_GAIN_FACTOR             3.0f        // audio input gain multiplier
 #define INT24_TO_FLOAT_DIVISOR        8388608.0f  // 2^23 for 24-bit signed to float conversion
 #define I2S_READ_TIMEOUT_MS           100         // i2s read operation timeout
 #define AUDIO_SILENCE_FLOOR_DB        -80.0f      // minimum db level (silence floor)
@@ -63,7 +63,7 @@
 
 // Refined Pass
 #define YIN_THRESHOLD         0.15f    // detection confidence
-#define YIN_SEARCH_WINDOW     0.40f    // ±40% search range
+#define YIN_SEARCH_WINDOW     0.40f    //default  ±40% search range, configurable runtime parameter
 #define YIN_MAX_CANDIDATES    8        // max candidates for refined analysis
 
 // Harmonic Scoring
@@ -113,10 +113,10 @@
 // =================================================================
 // POWER MANAGEMENT
 // =================================================================
-#define DB_ACTIVATION_THRESHOLD   -15.0f  // dB level to enter analyzing mode
-#define DB_DEACTIVATION_THRESHOLD -25.0f  // dB level threshold for silence detection
-#define DB_REFERENCE_LEVEL        0.1f    // Reference rms level for dB calculation
-#define SILENCE_TIMEOUT_MS        5000    // Time to return to detecting mode
+#define DB_ACTIVATION_THRESHOLD   -15.0f  // default  dB level to enter analyzing mode, configurable runtime parameter
+#define DB_DEACTIVATION_THRESHOLD -25.0f  // default dB level threshold for silence detection, configurable runtime parameter
+#define DB_REFERENCE_LEVEL        0.1f    // default Reference rms level for dB calculation
+#define SILENCE_TIMEOUT_MS        5000    // default Time to return to detecting mode, configurable runtime parameter
 #define DETECTING_CPU_FREQ        80      // MHz in detecting mode
 #define ANALYZING_CPU_FREQ        240     // MHz in analyzing mode
 
@@ -152,8 +152,8 @@
 #define TFT_PANEL_HEIGHT 240
 
 // Tuner Interface
-#define CENTS_UNDER_THRESHOLD -15 // Flat threshold
-#define CENTS_OVER_THRESHOLD   15 // Sharp threshold
+//#define CENTS_UNDER_THRESHOLD -15 //(unused) Flat threshold, configurable runtime parameter
+//#define CENTS_OVER_THRESHOLD   15 //(unused) Sharp threshold, configurable runtime parameter
 #define DISPLAY_CENTER_X       120
 #define DISPLAY_CENTER_Y       120
 #define DISPLAY_INNER_RADIUS   67   // Flat circle
@@ -194,7 +194,7 @@
 
 // menu structure configuration  
 #define MENU_MAX_ITEMS             5     // maximum items per menu level
-#define MENU_TIMEOUT_MS            10000 // auto-exit menu after 10 seconds inactive
+#define MENU_TIMEOUT_MS            10000 // default auto-exit menu after 10 seconds inactive, configurable runtime parameter
 
 // menu display layout
 #define MENU_TITLE_Y               40    // y position for menu title

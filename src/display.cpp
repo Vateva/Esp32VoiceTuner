@@ -87,7 +87,6 @@ void initDisplay() {
   tft.setRotation(0);
 
   safePrintf("display initialized successfully\n");
-  drawTunerInterface();
 }
 
 // startup animation function - add to display.cpp
@@ -448,11 +447,6 @@ void updateTunerDisplay(const char *note, int cents, const TuningResult *result,
       return;
     }
 
-    // ensure we are not in detecting mode display
-    if (displayState.showingDetectingMode) {
-      drawTunerInterface(); // redraw full interface
-      displayState.showingDetectingMode = false;
-    }
 
     drawStaticTunerElements();
 

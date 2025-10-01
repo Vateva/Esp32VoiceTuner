@@ -88,12 +88,12 @@ void setup() {
   Serial.println("Audio queue created successfully");
 
   // initialize power management state
-  currentPowerState = DETECTING;
+  currentPowerState = ANALYZING;
   silenceTimer = 0;
   lastSoundTime = millis();
 
-  // set initial cpu frequency for detecting mode
-  setCpuFrequency(DETECTING_CPU_FREQ);
+  // set initial cpu frequency for analyzing mode
+  setCpuFrequency(ANALYZING_CPU_FREQ);
 
   // dual-core task creation with affinity
   BaseType_t result1 = xTaskCreatePinnedToCore(
@@ -121,8 +121,9 @@ void setup() {
   safePrintf("CPU: %d MHz\n", getCpuFrequencyMhz());
   safePrintf("====================================\n\n");
 
-  // switch to detecting mode display (shows power saving state)
-  displayDetectingMode();
+  //draw interface when everything is initialized
+  drawTunerInterface();
+
 }
 
 // main loop with watchdog prevention
