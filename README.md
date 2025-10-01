@@ -53,6 +53,21 @@ Buttons are active low (pressed = LOW, released = HIGH)
 
 ## Wiring and Assembly
 
+### Breadboard
+![tunerBreadBoard](https://github.com/user-attachments/assets/967493f7-d8b5-40e8-abf8-89485d1362c4)
+
+### Soldered guts
+![tunerSoloderedGuts](https://github.com/user-attachments/assets/8b4d445a-f375-49b6-b420-ef4f20fa73d1)
+
+### Casing
+![casing](https://github.com/user-attachments/assets/6567b193-762e-4b79-bc74-7838563c22dc)
+
+### In casing
+![inCasing](https://github.com/user-attachments/assets/f8b2cb8e-5c11-4834-ab48-861f482406df)
+
+### Finished
+![tunerFinished1](https://github.com/user-attachments/assets/ccd3fa0f-1f99-42ad-9edf-24b38e5d66ea)
+
 **Power:**
 - TP4056 handles battery charging via USB
 - Power switch controls main power
@@ -147,4 +162,17 @@ Round display optimized for tuning visualization:
 - Library Dependencies: `lovyan03/LovyanGFX@^1.1.12`
 
 Upload with default PlatformIO settings - no special configuration required.
+
+## Videos
+
+### Test video
+
+
+https://github.com/user-attachments/assets/ada7eb09-d798-44a8-a253-f5996cc67c34
+
+### Menu navigation and sleep
+
+
+
+https://github.com/user-attachments/assets/7b2660a6-9329-4d96-aefc-cad8921d8ced
 
