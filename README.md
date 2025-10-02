@@ -12,17 +12,6 @@ Main objective is to learn multithreading with true parallel processing across m
 - 2x Momentary Push Buttons
 - Power Switch
 
-## Current Status
-**Fully functional prototype** - all core features implemented and tested:
-- [x] Dual-core audio processing (Core 0: capture, Core 1: analysis/display)
-- [x] Two-pass YIN pitch detection with harmonic validation
-- [x] Cascaded Butterworth filtering (highpass/lowpass)
-- [x] Confidence-based exponential moving average smoothing
-- [x] dB-based power management (80MHz detecting / 240MHz analyzing)
-- [x] Runtime-configurable menu system with flash persistence
-- [x] 10 musical scales with 2 note naming systems
-- [x] Startup animation and sleep mode with animated zzz
-- [x] 3D printed enclosure (files will be uploaded to repository)
 
 ## Pinout Configuration
 
@@ -130,15 +119,6 @@ Supports 10 different scales with configurable root note:
 - Automatically snaps detected frequency to nearest scale note
 - Calculates cents offset from perfect pitch within selected scale
 
-### Visual Feedback
-Round display optimized for tuning visualization:
-- Three concentric reference circles (flat threshold, perfect pitch, sharp threshold)
-- Dynamic circle expands/contracts based on cents offset with collision avoidance
-- Color-coded accuracy: green (in tune) → yellow → orange → red (very out of tune)
-- Large note name display with octave number
-- Optional cents value display (toggleable)
-- Startup animation with progressive letter reveal
-- Sleep mode with floating animated zzz characters
 
 ## Technical Specifications
 
@@ -148,7 +128,6 @@ Round display optimized for tuning visualization:
 - **Capture Interval:** 64ms (15.6 fps processing rate)
 - **End-to-End Latency:** ~35ms (capture → analysis → display)
 - **Frequency Range:** 40-1000Hz (code supports), 90-1000Hz (stable/verified)
-- **YIN Period Range:** 32-600 samples (80-1500Hz theoretical at 48kHz)
 
 ## Known Limitations
 - **Frequency Range:** while code theoretically supports 40-1000Hz, stable/reliable detection verified in 90-1000Hz range
