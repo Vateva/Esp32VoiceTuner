@@ -3,6 +3,16 @@ Real-time voice/instrument tuner using ESP32-S3 with dual-core FreeRTOS, YIN pit
 
 Main objective is to learn multithreading with true parallel processing across multiple cores and gain deeper experience with embedded systems development.
 
+## Table of Contents
+- [Hardware Components](#hardware-components)
+- [Pinout Configuration](#pinout-configuration)
+- [Wiring and Assembly](#wiring-and-assembly)
+- [Key Features](#key-features)
+- [Technical Specifications](#technical-specifications)
+- [Known Limitations](#known-limitations)
+- [Build Environment](#build-environment)
+- [Videos](#videos)
+
 ## Hardware Components
 - ESP32-S3 Super Mini (or ESP32-S3 Zero)
 - GC9A01 Round Display (240x240, 1.28")
